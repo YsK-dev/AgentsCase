@@ -3,10 +3,10 @@ class ModelSelector:
     """
     Docstring for ModelSelector
     Selects the best model for the task 
-    How selects(Stategy):
-    - Supervisor: Needs high reasoning and low hallucination like qwen3:8b
-    - Reearcher: Needs speed for reading phi4-mini:latest or other small models
-    - Analyst: needs code generation like deepseek coder
+    How selects(Strategy):
+    - Supervisor: Needs high reasoning and low hallucination like pielee/qwen3-4b-thinking-2507_q8:latest
+    - Researcher: Needs speed for light fast text like qwen3:1.7b
+    - Analyst: needs code generation like deepseek-coder:1.3b
     """
     @staticmethod
     def get_model(agent_role: str):
