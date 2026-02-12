@@ -11,6 +11,8 @@ pydantic
 pydantic-core
 pydantic-settings
 yfinance
-duckduckgo-search
+ddgs
 langgraph
 matplotlib
+colorama
+langchain-experimental

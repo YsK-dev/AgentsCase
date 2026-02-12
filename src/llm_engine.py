@@ -1,25 +1,40 @@
+# src/llm_engine.py
 from langchain_ollama import ChatOllama
+
+
 class ModelSelector:
     """
-    Docstring for ModelSelector
-    Selects the best model for the task 
-    How selects(Strategy):
-    - Supervisor: Needs high reasoning and low hallucination like pielee/qwen3-4b-thinking-2507_q8:latest
-    - Researcher: Needs speed for light fast text like qwen3:1.7b
-    - Analyst: needs code generation like deepseek-coder:1.3b
-    """
-    @staticmethod
-    def get_model(agent_role: str):
-        if agent_role == "Supervisor":
-            return ChatOllama(model="pielee/qwen3-4b-thinking-2507_q8:latest",temperature=0)#temp 0 to make it deterministic
-        elif agent_role == "Researcher":
-            return ChatOllama(model="qwen3:1.7b", temperature=0.4)
-        elif agent_role == "Analyst":
-            return ChatOllama(model="deepseek-coder:1.3b", temperature=0.4)
-        else:
-            # fallback to qwen since it is the most balanced model
-            return ChatOllama(model="pielee/qwen3-4b-thinking-2507_q8:latest", temperature=0)
-        
- 
-        
+    Selects the best model for each agent role.
 
+    Strategy:
+    - supervisor : High reasoning, low hallucination → qwen3-4b-thinking (structured JSON output)
+    - researcher : Fast, lightweight text generation → qwen3:1.7b
+    - analyst   : Code generation & data work      → deepseek-coder:1.3b
+    - editor    : Balanced reasoning for synthesis  → qwen3-4b-thinking
+    """
+
+    MODELS = {
+        "supervisor": ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.0),
+        "researcher": ("qwen3:1.7b", 0.3),
+        "analyst":    ("deepseek-coder:1.3b", 0.3),
+        "editor":     ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.0),
+    }
+
+    @staticmethod
+    def get_model(agent_role: str) -> ChatOllama:
+        role = agent_role.lower()
+        model_name, temp = ModelSelector.MODELS.get(
+            role,
+            ModelSelector.MODELS["editor"],  # fallback
+        )
+        return ChatOllama(model=model_name, temperature=temp)
+
+    @staticmethod
+    def get_model_name(agent_role: str) -> str:
+        """Return the model name string for display purposes."""
+        role = agent_role.lower()
+        model_name, _ = ModelSelector.MODELS.get(
+            role,
+            ModelSelector.MODELS["editor"],
+        )
+        return model_name
