@@ -1,0 +1,16 @@
+langchain
+langchain-ollama
+langchain-community
+langchain-core
+langchain-text-splitters
+pypdf
+python-dotenv
+chromadb
+pysqlite3
+pydantic
+pydantic-core
+pydantic-settings
+yfinance
+duckduckgo-search
+langgraph
+matplotlib
