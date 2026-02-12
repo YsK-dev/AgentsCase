@@ -24,7 +24,8 @@ def web_search(query: str) -> str:
     """Search the web for general information. Returns top results with titles, URLs, and snippets."""
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=8))
+            # Use timelimit to prefer recent results
+            results = list(ddgs.text(query, max_results=8, timelimit="m"))
 
         if not results:
             return "No results found."
@@ -46,7 +47,13 @@ def news_search(query: str) -> str:
     """Search for recent news articles. Returns headlines with dates, sources, and summaries. Use this for news/current events queries."""
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.news(query, max_results=10))
+            # timelimit="d" = past day, "w" = past week, "m" = past month
+            results = list(ddgs.news(query, max_results=10, timelimit="w"))
+
+        if not results:
+            # Fallback: try broader time range if no results in past week
+            with DDGS() as ddgs:
+                results = list(ddgs.news(query, max_results=10, timelimit="m"))
 
         if not results:
             return "No news results found."

@@ -27,7 +27,8 @@ Rules:
 - Always include "editor" as the last agent
 - Return ONLY valid JSON, nothing else"""
 
-RESEARCHER_PROMPT = """You are a research agent. You have two search tools:
+RESEARCHER_PROMPT = """/no_think
+You are a research agent. You have two search tools:
 - news_search: Use this for news, current events, recent happenings, headlines
 - web_search: Use this for general factual information, how-to, definitions, etc.
 
@@ -37,9 +38,11 @@ Be thorough. Return factual findings with sources. Do NOT make up information.""
 ANALYST_PROMPT = """You are a data analyst. Analyze the provided data using Python code when calculations are needed.
 Focus on extracting numbers, trends, and comparisons. Be precise and data-driven."""
 
-EDITOR_PROMPT = """You are a senior editor. Write a clear, concise, professional answer to the user's question.
+EDITOR_PROMPT = """/no_think
+You are a senior editor. Write a clear, concise, professional answer to the user's question.
 Use the research data and analysis provided. Structure your response well.
-Do NOT mention internal agent processes or tools. Just deliver the answer naturally."""
+Do NOT mention internal agent processes or tools. Just deliver the answer naturally.
+Keep your response focused and under 500 words. Include dates and sources when available."""
 
 
 # ─── Supervisor ─────────────────────────────────────────────────────────────
@@ -104,13 +107,25 @@ def research_agent(state: dict) -> dict:
 
     print(f"\n{Fore.YELLOW}┌─ RESEARCHER ({model_name}){Style.RESET_ALL}")
 
-    llm = ModelSelector.get_model("researcher").bind_tools([web_search, news_search])
-
-    # Tailor the instruction based on query type from supervisor
+    # For news queries, call news_search directly — don't rely on small LLMs
+    # to pick the right tool. This is faster and more reliable.
     if query_type == "news":
-        instruction = f"Use the news_search tool to find the latest news about: {topic}"
-    else:
-        instruction = f"Use the web_search tool to find information about: {topic}"
+        print(f"{Fore.YELLOW}│  🔧 Tool: news_search (direct, query_type=news){Style.RESET_ALL}")
+        result = news_search.invoke({"query": topic})
+        print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of news results{Style.RESET_ALL}")
+
+        # If news_search returned nothing useful, fallback to web_search
+        if "No news results found" in str(result):
+            print(f"{Fore.YELLOW}│  ⚠️  No news found, falling back to web_search{Style.RESET_ALL}")
+            result = web_search.invoke({"query": f"{topic} 2026"})
+            print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of web results{Style.RESET_ALL}")
+
+        print(f"{Fore.YELLOW}└──────────────────────────────{Style.RESET_ALL}")
+        return {"research_output": str(result)}
+
+    # For non-news queries, let the LLM pick the tool
+    llm = ModelSelector.get_model("researcher").bind_tools([web_search, news_search])
+    instruction = f"Use the web_search tool to find information about: {topic}"
 
     messages = [
         SystemMessage(content=RESEARCHER_PROMPT),
@@ -138,12 +153,9 @@ def research_agent(state: dict) -> dict:
         final = llm.invoke(messages)
         output = final.content
     else:
-        # Fallback: if LLM didn't call a tool, do it ourselves based on query_type
-        print(f"{Fore.YELLOW}│  (LLM skipped tool call — executing {query_type} search directly){Style.RESET_ALL}")
-        if query_type == "news":
-            result = news_search.invoke({"query": topic})
-        else:
-            result = web_search.invoke({"query": topic})
+        # Fallback: if LLM didn't call a tool, do it ourselves
+        print(f"{Fore.YELLOW}│  (LLM skipped tool call — executing web_search directly){Style.RESET_ALL}")
+        result = web_search.invoke({"query": topic})
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of results{Style.RESET_ALL}")
         output = str(result)
 
