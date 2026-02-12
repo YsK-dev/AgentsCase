@@ -1,5 +1,4 @@
-from langchain_ollama import Chatollama
-
+from langchain_ollama import ChatOllama
 class ModelSelector:
     """
     Docstring for ModelSelector
@@ -12,14 +11,14 @@ class ModelSelector:
     @staticmethod
     def get_model(agent_role: str):
         if agent_role == "Supervisor":
-            return Chatollama(model="qwen3:8b")
+            return ChatOllama(model="pielee/qwen3-4b-thinking-2507_q8:latest",temperature=0)#temp 0 to make it deterministic
         elif agent_role == "Researcher":
-            return Chatollama(model="phi4-mini:latest")
+            return ChatOllama(model="qwen3:1.7b", temperature=0.4)
         elif agent_role == "Analyst":
-            return Chatollama(model="deepseek-coder:1.3b")
+            return ChatOllama(model="deepseek-coder:1.3b", temperature=0.4)
         else:
             # fallback to qwen since it is the most balanced model
-            return Chatollama(model="qwen3:8b")
+            return ChatOllama(model="pielee/qwen3-4b-thinking-2507_q8:latest", temperature=0)
         
  
         
