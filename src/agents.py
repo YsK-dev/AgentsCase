@@ -28,21 +28,26 @@ Rules:
 - Return ONLY valid JSON, nothing else"""
 
 RESEARCHER_PROMPT = """/no_think
-You are a research agent. You have two search tools:
-- news_search: Use this for news, current events, recent happenings, headlines
-- web_search: Use this for general factual information, how-to, definitions, etc.
+You are a research agent with search tools. Pick the RIGHT tool:
+- news_search: for news, current events, headlines
+- web_search: for general facts, how-to, definitions
 
-Pick the RIGHT tool for the query. For news queries, ALWAYS use news_search.
-Be thorough. Return factual findings with sources. Do NOT make up information."""
+Return findings with sources. Do NOT make up information. Be brief and factual."""
 
-ANALYST_PROMPT = """You are a data analyst. Analyze the provided data using Python code when calculations are needed.
-Focus on extracting numbers, trends, and comparisons. Be precise and data-driven."""
+ANALYST_PROMPT = """/no_think
+You are a data analyst. Analyze data using Python code when calculations are needed.
+Focus on numbers, trends, and comparisons. Be precise."""
 
 EDITOR_PROMPT = """/no_think
-You are a senior editor. Write a clear, concise, professional answer to the user's question.
-Use the research data and analysis provided. Structure your response well.
-Do NOT mention internal agent processes or tools. Just deliver the answer naturally.
-Keep your response focused and under 500 words. Include dates and sources when available."""
+You are a senior editor. Write a clear, professional answer using ONLY the research data provided.
+
+Rules:
+- Include specific dates, sources, and URLs from the research
+- Structure with bullet points or numbered list for news
+- Do NOT add information not in the research data
+- Do NOT mention internal processes or tools
+- Keep response under 400 words
+- Start directly with the answer, no preamble"""
 
 
 # ─── Supervisor ─────────────────────────────────────────────────────────────
@@ -117,15 +122,24 @@ def research_agent(state: dict) -> dict:
         # If news_search returned nothing useful, fallback to web_search
         if "No news results found" in str(result):
             print(f"{Fore.YELLOW}│  ⚠️  No news found, falling back to web_search{Style.RESET_ALL}")
-            result = web_search.invoke({"query": f"{topic} 2026"})
+            result = web_search.invoke({"query": f"{topic} latest news 2026"})
             print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of web results{Style.RESET_ALL}")
 
         print(f"{Fore.YELLOW}└──────────────────────────────{Style.RESET_ALL}")
+        # Return raw search results directly — no LLM summarization needed
         return {"research_output": str(result)}
 
-    # For non-news queries, let the LLM pick the tool
+    # For factual queries, also call web_search directly for speed
+    if query_type == "factual":
+        print(f"{Fore.YELLOW}│  🔧 Tool: web_search (direct, query_type=factual){Style.RESET_ALL}")
+        result = web_search.invoke({"query": topic})
+        print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of results{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}└──────────────────────────────{Style.RESET_ALL}")
+        return {"research_output": str(result)}
+
+    # For data/other queries, let the LLM pick the tool
     llm = ModelSelector.get_model("researcher").bind_tools([web_search, news_search])
-    instruction = f"Use the web_search tool to find information about: {topic}"
+    instruction = f"Search for information about: {topic}"
 
     messages = [
         SystemMessage(content=RESEARCHER_PROMPT),
@@ -230,5 +244,12 @@ def editor_agent(state: dict) -> dict:
     ]
 
     response = llm.invoke(messages)
+
+    # Strip any <think>...</think> blocks from the response
+    content = response.content
+    if "<think>" in content:
+        import re
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
     print(f"{Fore.GREEN}└──────────────────────────────{Style.RESET_ALL}")
-    return {"final_report": response.content}
+    return {"final_report": content}

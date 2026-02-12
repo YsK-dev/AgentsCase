@@ -24,8 +24,12 @@ def web_search(query: str) -> str:
     """Search the web for general information. Returns top results with titles, URLs, and snippets."""
     try:
         with DDGS() as ddgs:
-            # Use timelimit to prefer recent results
-            results = list(ddgs.text(query, max_results=8, timelimit="m"))
+            results = list(ddgs.text(query, max_results=10, timelimit="m"))
+
+        # Fallback without time limit if no recent results
+        if not results:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=10))
 
         if not results:
             return "No results found."
@@ -44,22 +48,48 @@ def web_search(query: str) -> str:
 
 @tool
 def news_search(query: str) -> str:
-    """Search for recent news articles. Returns headlines with dates, sources, and summaries. Use this for news/current events queries."""
+    """Search for recent news articles. Returns headlines with dates, sources, and summaries."""
     try:
-        with DDGS() as ddgs:
-            # timelimit="d" = past day, "w" = past week, "m" = past month
-            results = list(ddgs.news(query, max_results=10, timelimit="w"))
+        # Try multiple query variations for better coverage
+        all_results = []
+        queries = [query]
 
-        if not results:
-            # Fallback: try broader time range if no results in past week
-            with DDGS() as ddgs:
-                results = list(ddgs.news(query, max_results=10, timelimit="m"))
+        # Add region-specific variation if not already present
+        query_lower = query.lower()
+        if "turkey" not in query_lower and "türkiye" not in query_lower:
+            # Check if it's a Turkish city/topic
+            turkish_cities = ["istanbul", "ankara", "izmir", "antalya", "bursa"]
+            if any(city in query_lower for city in turkish_cities):
+                queries.append(f"{query} Turkey")
 
-        if not results:
+        for q in queries:
+            # Try past day first, then week, then month
+            for period in ["d", "w", "m"]:
+                if len(all_results) >= 10:
+                    break
+                try:
+                    with DDGS() as ddgs:
+                        results = list(ddgs.news(q, max_results=10, timelimit=period))
+                    if results:
+                        # Deduplicate by title
+                        existing_titles = {r.get("title", "") for r in all_results}
+                        for r in results:
+                            if r.get("title", "") not in existing_titles:
+                                all_results.append(r)
+                                existing_titles.add(r.get("title", ""))
+                        if len(all_results) >= 5:
+                            break  # Got enough results
+                except Exception:
+                    continue
+
+        if not all_results:
             return "No news results found."
 
+        # Sort by date (most recent first) and limit to top 10
+        all_results = all_results[:10]
+
         formatted = []
-        for i, r in enumerate(results, 1):
+        for i, r in enumerate(all_results, 1):
             date = r.get("date", "Unknown date")
             source = r.get("source", "Unknown source")
             formatted.append(
