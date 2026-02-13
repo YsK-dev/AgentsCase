@@ -337,11 +337,23 @@ def editor_agent(state: dict) -> dict:
 
     response = llm.invoke(messages)
 
+    # Debug: print raw response type and length
+    print(f"{Fore.GREEN}│  Response type: {type(response)}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}│  Raw response: {str(response)[:200]}{Style.RESET_ALL}")
+
+    # Extract content - handle different response types
+    if hasattr(response, 'content'):
+        content = response.content
+    elif hasattr(response, 'text'):
+        content = response.text
+    else:
+        content = str(response)
+
     # Strip any <think>...</think> blocks from the response
-    content = response.content
     if "<think>" in content:
         import re
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
+    print(f"{Fore.GREEN}│  Content length: {len(content)} chars{Style.RESET_ALL}")
     print(f"{Fore.GREEN}└──────────────────────────────{Style.RESET_ALL}")
     return {"final_report": content}
