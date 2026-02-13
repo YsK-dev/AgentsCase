@@ -1,8 +1,12 @@
 # src/tools.py
+import ast
+import base64
 import html
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -12,7 +16,6 @@ from html.parser import HTMLParser
 from typing import Any, Dict, List
 
 from langchain_core.tools import tool
-from langchain_experimental.utilities import PythonREPL
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://13.60.59.170/search")
 SEARXNG_TIMEOUT = float(os.getenv("SEARXNG_TIMEOUT", "5"))
@@ -42,10 +45,126 @@ _FOCUS_TERMS = {
     "python", "langchain", "postgresql", "nvidia", "aws", "docker", "kubernetes",
     "javascript", "typescript", "java", "golang", "rust", "sql", "linux",
 }
+PYTHON_CODE_MAX_CHARS = int(os.getenv("PYTHON_CODE_MAX_CHARS", "4000"))
+PYTHON_EXEC_TIMEOUT = float(os.getenv("PYTHON_EXEC_TIMEOUT", "4.0"))
+PYTHON_OUTPUT_MAX_CHARS = int(os.getenv("PYTHON_OUTPUT_MAX_CHARS", "4000"))
+SAFE_PYTHON_MODULES = {
+    "collections",
+    "datetime",
+    "decimal",
+    "fractions",
+    "functools",
+    "itertools",
+    "json",
+    "math",
+    "random",
+    "re",
+    "statistics",
+}
+BLOCKED_PYTHON_CALLS = {
+    "__import__",
+    "breakpoint",
+    "compile",
+    "eval",
+    "exec",
+    "help",
+    "input",
+    "open",
+}
+BLOCKED_PYTHON_ROOTS = {
+    "asyncio",
+    "builtins",
+    "ctypes",
+    "importlib",
+    "multiprocessing",
+    "os",
+    "pathlib",
+    "resource",
+    "shutil",
+    "signal",
+    "socket",
+    "subprocess",
+    "sys",
+    "threading",
+}
+SAFE_PYTHON_RUNNER = r"""
+import base64
+import contextlib
+import io
+import json
+import sys
+
+SAFE_MODULES = {
+    "collections",
+    "datetime",
+    "decimal",
+    "fractions",
+    "functools",
+    "itertools",
+    "json",
+    "math",
+    "random",
+    "re",
+    "statistics",
+}
+
+def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    top_level = name.split(".")[0]
+    if top_level not in SAFE_MODULES:
+        raise ImportError(f"Import '{name}' is not allowed")
+    return __import__(name, globals, locals, fromlist, level)
+
+SAFE_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "filter": filter,
+    "float": float,
+    "int": int,
+    "len": len,
+    "list": list,
+    "map": map,
+    "max": max,
+    "min": min,
+    "pow": pow,
+    "print": print,
+    "range": range,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+    "__import__": safe_import,
+}
+
+payload = {"stdout": "", "stderr": "", "error": ""}
+code = base64.b64decode(sys.argv[1]).decode("utf-8")
+stdout_buffer = io.StringIO()
+stderr_buffer = io.StringIO()
+
+try:
+    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+        exec(compile(code, "<user_code>", "exec"), {"__builtins__": SAFE_BUILTINS}, {})
+except Exception as exc:
+    payload["error"] = str(exc)
+
+payload["stdout"] = stdout_buffer.getvalue()
+payload["stderr"] = stderr_buffer.getvalue()
+print(json.dumps(payload))
+"""
 
 
 class DuckDuckGoRateLimitError(RuntimeError):
     """Raised when DuckDuckGo returns a temporary anti-bot/rate-limit response."""
+
+
+class UnsafePythonCodeError(ValueError):
+    """Raised when user code violates safety constraints."""
 
 
 class ToolSelector:
@@ -141,6 +260,120 @@ def _rerank_by_query(query: str, results: List[Dict[str, str]]) -> List[Dict[str
 
     scored.sort(key=lambda row: (-row[0], row[1]))
     return [row[2] for row in scored]
+
+
+def _attribute_root_name(node: ast.AST) -> str:
+    current = node
+    while isinstance(current, ast.Attribute):
+        current = current.value
+    if isinstance(current, ast.Name):
+        return current.id
+    return ""
+
+
+def _validate_python_code(code: str) -> None:
+    if not isinstance(code, str) or not code.strip():
+        raise UnsafePythonCodeError("Code input is empty.")
+    if len(code) > PYTHON_CODE_MAX_CHARS:
+        raise UnsafePythonCodeError(
+            f"Code too long ({len(code)} chars). Max allowed is {PYTHON_CODE_MAX_CHARS}."
+        )
+
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as exc:
+        raise UnsafePythonCodeError(f"Syntax error: {exc}") from exc
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name.split(".")[0]
+                if module not in SAFE_PYTHON_MODULES:
+                    raise UnsafePythonCodeError(
+                        f"Import '{module}' is not allowed."
+                    )
+
+        if isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".")[0]
+            if module not in SAFE_PYTHON_MODULES:
+                raise UnsafePythonCodeError(
+                    f"Import from '{module or '[relative]'}' is not allowed."
+                )
+
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in BLOCKED_PYTHON_CALLS:
+                raise UnsafePythonCodeError(
+                    f"Call to '{node.func.id}' is blocked."
+                )
+            root = _attribute_root_name(node.func)
+            if root in BLOCKED_PYTHON_ROOTS:
+                raise UnsafePythonCodeError(
+                    f"Calls through '{root}' are blocked."
+                )
+
+        if isinstance(node, ast.Attribute):
+            root = _attribute_root_name(node)
+            if root in BLOCKED_PYTHON_ROOTS:
+                raise UnsafePythonCodeError(
+                    f"Access to '{root}' is blocked."
+                )
+
+        if isinstance(node, ast.Name) and node.id in {
+            "__builtins__",
+            "__loader__",
+            "__spec__",
+            "__import__",
+        }:
+            raise UnsafePythonCodeError(
+                f"Name '{node.id}' is blocked."
+            )
+
+
+def _run_safe_python_code(code: str) -> str:
+    encoded_code = base64.b64encode(code.encode("utf-8")).decode("ascii")
+    try:
+        process = subprocess.run(
+            [sys.executable, "-I", "-c", SAFE_PYTHON_RUNNER, encoded_code],
+            capture_output=True,
+            text=True,
+            timeout=PYTHON_EXEC_TIMEOUT,
+            env={},
+        )
+    except subprocess.TimeoutExpired:
+        return f"Error: Code execution timed out after {PYTHON_EXEC_TIMEOUT:.1f}s."
+
+    if process.returncode != 0 and not process.stdout.strip():
+        stderr = (process.stderr or "").strip()
+        return f"Error: Python runner failed ({process.returncode}). {stderr}"
+
+    stdout = (process.stdout or "").strip()
+    if not stdout:
+        stderr = (process.stderr or "").strip()
+        if stderr:
+            return f"Error: Empty response. {stderr}"
+        return "Code executed successfully (no output)."
+
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except json.JSONDecodeError:
+        return f"Error: Failed to parse execution output. Raw output: {stdout[:500]}"
+
+    error = str(payload.get("error", "")).strip()
+    out = str(payload.get("stdout", "")).strip()
+    err = str(payload.get("stderr", "")).strip()
+
+    if error:
+        result = f"Error: {error}"
+    elif out:
+        result = out
+    elif err:
+        result = err
+    else:
+        result = "Code executed successfully (no output)."
+
+    if len(result) > PYTHON_OUTPUT_MAX_CHARS:
+        return result[:PYTHON_OUTPUT_MAX_CHARS] + "\n... (output truncated)"
+    return result
 
 
 def _fetch_json(url: str, params: Dict[str, str]) -> Dict[str, Any]:
@@ -525,10 +758,12 @@ def news_search(query: str) -> str:
 
 @tool
 def python_repl(code: str) -> str:
-    """Run Python code and return the output. Useful for calculations, data processing, or analysis."""
-    repl = PythonREPL()
+    """Safely execute restricted Python code for calculations and small data checks."""
     try:
-        result = repl.run(code)
+        _validate_python_code(code)
+    except UnsafePythonCodeError as e:
+        return f"Error: Unsafe code blocked. {e}"
     except Exception as e:
-        result = f"Error: {e}"
-    return result
+        return f"Error: Validation failed. {e}"
+
+    return _run_safe_python_code(code)

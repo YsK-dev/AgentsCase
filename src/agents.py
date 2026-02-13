@@ -245,7 +245,11 @@ def _build_fallback_report(topic: str, query_type: str, research: str, analysis:
 def supervisor_agent(state: dict) -> dict:
     """Routes the query to the right agents based on query classification."""
     topic = state["topic"]
-    model_name = ModelSelector.get_model_name("supervisor")
+    model_name = ModelSelector.get_model_name(
+        "supervisor",
+        task_text=topic,
+        query_type="routing",
+    )
 
     print(f"\n{Fore.MAGENTA}┌─ SUPERVISOR ({model_name}){Style.RESET_ALL}")
     print(f"{Fore.MAGENTA}│  Classifying query...{Style.RESET_ALL}")
@@ -259,7 +263,11 @@ def supervisor_agent(state: dict) -> dict:
         print(f"{Fore.MAGENTA}└──────────────────────────────{Style.RESET_ALL}")
         return {"route": agents, "query_type": query_type}
 
-    llm = ModelSelector.get_model("supervisor")
+    llm = ModelSelector.get_model(
+        "supervisor",
+        task_text=topic,
+        query_type="routing",
+    )
     messages = [
         SystemMessage(content=SUPERVISOR_PROMPT),
         HumanMessage(content=f"User query: {topic}"),
@@ -301,13 +309,19 @@ def supervisor_agent(state: dict) -> dict:
     return {"route": agents, "query_type": query_type}
 
 
-# ─── Researcher ─────────────────────────────────────────────────────────────
+# ─── Researcher 
+# ──────────────────────────────────────────────────────────
+# ----------------------------------------------------
 
 def research_agent(state: dict) -> dict:
     """Searches the web for information about the topic."""
     topic = state["topic"]
     query_type = state.get("query_type", "factual")
-    model_name = ModelSelector.get_model_name("researcher")
+    model_name = ModelSelector.get_model_name(
+        "researcher",
+        task_text=topic,
+        query_type=query_type,
+    )
 
     print(f"\n{Fore.YELLOW}┌─ RESEARCHER ({model_name}){Style.RESET_ALL}")
 
@@ -335,7 +349,11 @@ def research_agent(state: dict) -> dict:
         return {"research_output": str(result)}
 
     # For data/other queries, let the LLM pick the tool
-    llm = ModelSelector.get_model("researcher").bind_tools(
+    llm = ModelSelector.get_model(
+        "researcher",
+        task_text=topic,
+        query_type=query_type,
+    ).bind_tools(
         [web_search, searxng_search, duckduckgo_search, news_search]
     )
     instruction = f"Search for information about: {topic}"
@@ -385,11 +403,19 @@ def analyst_agent(state: dict) -> dict:
     """Analyzes data with Python code execution."""
     topic = state["topic"]
     research_data = state.get("research_output", "No data provided.")
-    model_name = ModelSelector.get_model_name("analyst")
+    model_name = ModelSelector.get_model_name(
+        "analyst",
+        task_text=f"{topic}\n{research_data[:1500]}",
+        query_type="data",
+    )
 
     print(f"\n{Fore.BLUE}┌─ ANALYST ({model_name}){Style.RESET_ALL}")
 
-    llm = ModelSelector.get_model("analyst").bind_tools([python_repl])
+    llm = ModelSelector.get_model(
+        "analyst",
+        task_text=f"{topic}\n{research_data[:1500]}",
+        query_type="data",
+    ).bind_tools([python_repl])
     messages = [
         SystemMessage(content=ANALYST_PROMPT),
         HumanMessage(
@@ -428,13 +454,21 @@ def editor_agent(state: dict) -> dict:
     query_type = state.get("query_type", "general")
     research = state.get("research_output", "")
     analysis = state.get("analysis_output", "")
-    model_name = ModelSelector.get_model_name("editor")
+    model_name = ModelSelector.get_model_name(
+        "editor",
+        task_text=f"{topic}\n{research[:1500]}\n{analysis[:1500]}",
+        query_type=query_type,
+    )
 
     print(f"\n{Fore.GREEN}┌─ EDITOR ({model_name}){Style.RESET_ALL}")
     print(f"{Fore.GREEN}│  Report type: {query_type}{Style.RESET_ALL}")
     print(f"{Fore.GREEN}│  Writing final report...{Style.RESET_ALL}")
 
-    llm = ModelSelector.get_model("editor")
+    llm = ModelSelector.get_model(
+        "editor",
+        task_text=f"{topic}\n{research[:1500]}\n{analysis[:1500]}",
+        query_type=query_type,
+    )
 
     # Select the right prompt template based on query type
     editor_prompt = EDITOR_PROMPTS.get(query_type, EDITOR_PROMPT_GENERAL)
