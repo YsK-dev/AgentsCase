@@ -18,7 +18,7 @@ class ModelSelector:
         "supervisor": ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.0, {}),
         "researcher": ("qwen3:1.7b", 0.3, {"num_predict": 512}),
         "analyst":    ("deepseek-coder:1.3b", 0.3, {}),
-        "editor":     ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.3, {"num_predict": 4096}),
+        "editor":     ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.3, {}),
     }
 
     @staticmethod
