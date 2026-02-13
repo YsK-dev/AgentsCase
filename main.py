@@ -9,7 +9,14 @@ def main():
     print("Initializing Multi-Agent System with Smart Routing...")
     app = build_graph()
 
-    user_query = "Istanbul news latest"
+    # Get user query
+    import sys
+    if len(sys.argv) > 1:
+        user_query = " ".join(sys.argv[1:])
+    else:
+        user_query = input("Enter your query: ").strip()
+        if not user_query:
+            user_query = "Istanbul news latest"
 
     initial_state = {
         "topic": user_query,
