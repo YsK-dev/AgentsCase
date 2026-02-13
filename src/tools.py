@@ -1,7 +1,42 @@
 # src/tools.py
-from ddgs import DDGS
-from langchain_experimental.utilities import PythonREPL
+import html
+import json
+import os
+import re
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from html.parser import HTMLParser
+from typing import Any, Dict, List
+
 from langchain_core.tools import tool
+from langchain_experimental.utilities import PythonREPL
+
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://13.60.59.170/search")
+SEARXNG_TIMEOUT = float(os.getenv("SEARXNG_TIMEOUT", "5"))
+SEARCH_MAX_RESULTS = int(os.getenv("SEARCH_MAX_RESULTS", "10"))
+DUCKDUCKGO_HTML_URL = os.getenv("DUCKDUCKGO_HTML_URL", "https://html.duckduckgo.com/html/")
+DUCKDUCKGO_LITE_URL = os.getenv("DUCKDUCKGO_LITE_URL", "https://lite.duckduckgo.com/lite/")
+DUCKDUCKGO_PROXY_PREFIX = os.getenv(
+    "DUCKDUCKGO_PROXY_PREFIX",
+    "https://r.jina.ai/http://duckduckgo.com/html/",
+)
+DUCKDUCKGO_TIMEOUT = float(os.getenv("DUCKDUCKGO_TIMEOUT", "4"))
+DUCKDUCKGO_MIN_INTERVAL = float(os.getenv("DUCKDUCKGO_MIN_INTERVAL", "0.2"))
+DUCKDUCKGO_RETRIES = int(os.getenv("DUCKDUCKGO_RETRIES", "1"))
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+_DDG_LOCK = threading.Lock()
+_DDG_LAST_REQUEST_TS = 0.0
+
+
+class DuckDuckGoRateLimitError(RuntimeError):
+    """Raised when DuckDuckGo returns a temporary anti-bot/rate-limit response."""
 
 
 class ToolSelector:
@@ -12,91 +47,426 @@ class ToolSelector:
         if agent_role == "supervisor":
             return []
         elif agent_role == "researcher":
-            return [web_search, news_search]
+            return [web_search, searxng_search, duckduckgo_search, news_search]
         elif agent_role == "analyst":
             return [python_repl]
         else:
-            return [web_search, news_search, python_repl]
+            return [web_search, searxng_search, duckduckgo_search, news_search, python_repl]
+
+
+def _normalize_text(text: Any) -> str:
+    if text is None:
+        return ""
+    return str(text).strip()
+
+
+def _clean_text(text: Any) -> str:
+    value = html.unescape(_normalize_text(text))
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _dedupe_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    deduped = []
+    seen_urls = set()
+    for item in results:
+        url = _normalize_text(item.get("url"))
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        deduped.append(item)
+    return deduped
+
+
+def _format_search_results(results: List[Dict[str, str]]) -> str:
+    if not results:
+        return "No results found."
+
+    formatted = []
+    for i, item in enumerate(results, 1):
+        title = _clean_text(item.get("title")) or "No title"
+        url = _normalize_text(item.get("url")) or "N/A"
+        snippet = _clean_text(item.get("snippet")) or "No snippet"
+        formatted.append(
+            f"[{i}] {title}\n"
+            f"    URL: {url}\n"
+            f"    {snippet}"
+        )
+    return "\n\n".join(formatted)
+
+
+def _fetch_json(url: str, params: Dict[str, str]) -> Dict[str, Any]:
+    encoded = urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        f"{url}?{encoded}",
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=SEARXNG_TIMEOUT) as response:
+            if response.status != 200:
+                raise RuntimeError(f"HTTP {response.status}")
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(reason) from exc
+
+
+def _wait_for_ddg_slot() -> None:
+    global _DDG_LAST_REQUEST_TS
+    if DUCKDUCKGO_MIN_INTERVAL <= 0:
+        return
+
+    with _DDG_LOCK:
+        now = time.monotonic()
+        wait_s = DUCKDUCKGO_MIN_INTERVAL - (now - _DDG_LAST_REQUEST_TS)
+        if wait_s > 0:
+            time.sleep(wait_s)
+        _DDG_LAST_REQUEST_TS = time.monotonic()
+
+
+def _build_http_headers(accept_json: bool = False) -> Dict[str, str]:
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    if accept_json:
+        headers["Accept"] = "application/json"
+    else:
+        headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    return headers
+
+
+def _fetch_html(url: str, timeout: float) -> str:
+    request = urllib.request.Request(url, headers=_build_http_headers(accept_json=False))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 0))
+            body = response.read().decode("utf-8", errors="ignore")
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        status = int(getattr(exc, "code", 0))
+        if status in (202, 403, 429):
+            raise DuckDuckGoRateLimitError(f"HTTP {status}") from exc
+        raise RuntimeError(f"HTTP {status}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(reason) from exc
+
+    if status in (202, 403, 429):
+        raise DuckDuckGoRateLimitError(f"HTTP {status}")
+    if status != 200:
+        raise RuntimeError(f"HTTP {status}")
+    return body
+
+
+def _fetch_text(url: str, timeout: float) -> str:
+    request = urllib.request.Request(url, headers=_build_http_headers(accept_json=False))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 0))
+            body = response.read().decode("utf-8", errors="ignore")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"HTTP {int(getattr(exc, 'code', 0))}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise RuntimeError(reason) from exc
+
+    if status != 200:
+        raise RuntimeError(f"HTTP {status}")
+    return body
+
+
+def _parse_searx_results(data: Dict[str, Any], max_results: int) -> List[Dict[str, str]]:
+    parsed = []
+    for item in data.get("results", []):
+        parsed.append(
+            {
+                "title": _clean_text(item.get("title")) or "No title",
+                "url": _normalize_text(item.get("url")),
+                "snippet": _clean_text(item.get("content") or item.get("snippet")) or "No snippet",
+            }
+        )
+    return _dedupe_results(parsed)[:max_results]
+
+
+def _decode_ddg_redirect_url(href: str) -> str:
+    href = _normalize_text(href)
+    if not href:
+        return ""
+
+    parsed = urllib.parse.urlparse(href)
+    if parsed.path.startswith("/l/"):
+        qs = urllib.parse.parse_qs(parsed.query)
+        uddg = qs.get("uddg", [])
+        if uddg:
+            return urllib.parse.unquote(uddg[0])
+
+    if href.startswith("//"):
+        return f"https:{href}"
+    if href.startswith("/"):
+        return f"https://duckduckgo.com{href}"
+    return href
+
+
+class _DuckDuckGoHTMLParser(HTMLParser):
+    def __init__(self, max_results: int):
+        super().__init__()
+        self.max_results = max_results
+        self.results: List[Dict[str, str]] = []
+        self._capture_title = False
+        self._capture_snippet = False
+        self._snippet_tag = ""
+        self._title_parts: List[str] = []
+        self._snippet_parts: List[str] = []
+        self._current_href = ""
+
+    def handle_starttag(self, tag: str, attrs: List[tuple]):
+        if len(self.results) >= self.max_results:
+            return
+
+        attr_map = dict(attrs)
+        css_classes = _normalize_text(attr_map.get("class"))
+
+        if tag == "a" and ("result__a" in css_classes or "result-link" in css_classes):
+            self._capture_title = True
+            self._title_parts = []
+            self._current_href = _decode_ddg_redirect_url(attr_map.get("href", ""))
+            return
+
+        if tag in {"a", "div", "td"} and ("result__snippet" in css_classes or "result-snippet" in css_classes):
+            self._capture_snippet = True
+            self._snippet_tag = tag
+            self._snippet_parts = []
+
+    def handle_data(self, data: str):
+        if self._capture_title:
+            self._title_parts.append(data)
+        if self._capture_snippet:
+            self._snippet_parts.append(data)
+
+    def handle_endtag(self, tag: str):
+        if self._capture_title and tag == "a":
+            title = _clean_text("".join(self._title_parts))
+            if title and self._current_href:
+                self.results.append(
+                    {"title": title, "url": self._current_href, "snippet": "No snippet"}
+                )
+            self._capture_title = False
+            self._title_parts = []
+            self._current_href = ""
+
+        if self._capture_snippet and tag == self._snippet_tag:
+            snippet = _clean_text("".join(self._snippet_parts))
+            if snippet:
+                for item in reversed(self.results):
+                    if item.get("snippet") in ("", "No snippet"):
+                        item["snippet"] = snippet
+                        break
+            self._capture_snippet = False
+            self._snippet_tag = ""
+            self._snippet_parts = []
+
+
+def _parse_jina_ddg_markdown(markdown: str, max_results: int) -> List[Dict[str, str]]:
+    results = []
+    seen_urls = set()
+    pattern = re.compile(r"\[([^\]]+)\]\((http://duckduckgo\.com/l/\?uddg=[^)]+)\)")
+
+    for match in pattern.finditer(markdown):
+        title = _clean_text(match.group(1))
+        raw_url = match.group(2)
+        if not title or title.startswith("!"):
+            continue
+
+        decoded_url = _decode_ddg_redirect_url(raw_url)
+        if not decoded_url:
+            continue
+        if decoded_url in seen_urls:
+            continue
+        seen_urls.add(decoded_url)
+        results.append({"title": title, "url": decoded_url, "snippet": "No snippet"})
+        if len(results) >= max_results:
+            break
+
+    return results[:max_results]
+
+
+def run_searxng_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
+    data = _fetch_json(SEARXNG_URL, {"q": query, "format": "json"})
+    return _parse_searx_results(data, max_results)
+
+
+def run_searxng_news_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
+    all_results = []
+    query_variants = [query]
+
+    query_lower = query.lower()
+    if "turkey" not in query_lower and "türkiye" not in query_lower:
+        turkish_cities = ["istanbul", "ankara", "izmir", "antalya", "bursa"]
+        if any(city in query_lower for city in turkish_cities):
+            query_variants.append(f"{query} Turkey")
+
+    for q in query_variants:
+        for time_range in ["day", "month", "year", ""]:
+            params = {"q": q, "format": "json", "categories": "news"}
+            if time_range:
+                params["time_range"] = time_range
+
+            data = _fetch_json(SEARXNG_URL, params)
+            for item in data.get("results", []):
+                url = _normalize_text(item.get("url"))
+                source = _normalize_text(item.get("engine"))
+                if not source and url:
+                    source = urllib.parse.urlparse(url).netloc
+                all_results.append(
+                    {
+                        "title": _clean_text(item.get("title")) or "No title",
+                        "url": url,
+                        "snippet": _clean_text(item.get("content") or item.get("snippet")) or "No snippet",
+                        "date": _clean_text(item.get("publishedDate") or item.get("date")) or "Unknown date",
+                        "source": source or "Unknown source",
+                    }
+                )
+
+            all_results = _dedupe_results(all_results)
+            if len(all_results) >= max_results:
+                return all_results[:max_results]
+
+    return all_results[:max_results]
+
+
+def run_duckduckgo_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
+    endpoints = [
+        f"{DUCKDUCKGO_HTML_URL}?{urllib.parse.urlencode({'q': query, 'kl': 'us-en'})}",
+        f"{DUCKDUCKGO_LITE_URL}?{urllib.parse.urlencode({'q': query, 'kl': 'us-en'})}",
+    ]
+    last_error: Exception | None = None
+    best_results: List[Dict[str, str]] = []
+
+    for attempt in range(DUCKDUCKGO_RETRIES):
+        for endpoint in endpoints:
+            _wait_for_ddg_slot()
+            try:
+                html_doc = _fetch_html(endpoint, timeout=DUCKDUCKGO_TIMEOUT)
+                parser = _DuckDuckGoHTMLParser(max_results=max_results)
+                parser.feed(html_doc)
+                results = _dedupe_results(parser.results)[:max_results]
+                if len(results) > len(best_results):
+                    best_results = results
+                if len(results) >= max_results:
+                    return results
+            except DuckDuckGoRateLimitError as exc:
+                last_error = exc
+                continue
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        # Exponential backoff after each full endpoint cycle.
+        backoff = min(5.0, 0.6 * (2 ** attempt))
+        time.sleep(backoff)
+
+    # Fallback 1: route through SearXNG restricted to DuckDuckGo engine.
+    try:
+        data = _fetch_json(
+            SEARXNG_URL,
+            {"q": query, "format": "json", "engines": "duckduckgo"},
+        )
+        searx_ddg_results = _parse_searx_results(data, max_results)
+        if len(searx_ddg_results) > len(best_results):
+            best_results = searx_ddg_results
+        if len(searx_ddg_results) >= max_results:
+            return searx_ddg_results
+    except Exception as exc:
+        last_error = exc
+
+    # Fallback 2: fetch via text mirror and parse DDG result links.
+    try:
+        proxy_url = f"{DUCKDUCKGO_PROXY_PREFIX}?{urllib.parse.urlencode({'q': query})}"
+        proxy_markdown = _fetch_text(proxy_url, timeout=max(8.0, DUCKDUCKGO_TIMEOUT))
+        proxy_results = _parse_jina_ddg_markdown(proxy_markdown, max_results)
+        if len(proxy_results) > len(best_results):
+            best_results = proxy_results
+        if len(proxy_results) >= max_results:
+            return proxy_results
+    except Exception as exc:
+        last_error = exc
+
+    if best_results:
+        return best_results
+    if last_error is not None:
+        raise RuntimeError(f"DuckDuckGo search failed after retries and fallback: {last_error}")
+    return []
+
+
+@tool
+def searxng_search(query: str) -> str:
+    """Search the web using the configured SearXNG endpoint."""
+    try:
+        results = run_searxng_search(query)
+        if not results:
+            return "No results found from SearXNG."
+        return _format_search_results(results)
+    except Exception as e:
+        return f"SearXNG search error: {e}"
+
+
+@tool
+def duckduckgo_search(query: str) -> str:
+    """Search the web using DuckDuckGo."""
+    try:
+        results = run_duckduckgo_search(query)
+        if not results:
+            return "No results found from DuckDuckGo."
+        return _format_search_results(results)
+    except Exception as e:
+        return f"DuckDuckGo search error: {e}"
 
 
 @tool
 def web_search(query: str) -> str:
-    """Search the web for general information. Returns top results with titles, URLs, and snippets."""
+    """Search the web for general information. Uses SearXNG first, then DuckDuckGo as fallback."""
+    errors = []
+
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=10, timelimit="m"))
-
-        # Fallback without time limit if no recent results
-        if not results:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=10))
-
-        if not results:
-            return "No results found."
-
-        formatted = []
-        for i, r in enumerate(results, 1):
-            formatted.append(
-                f"[{i}] {r.get('title', 'No title')}\n"
-                f"    URL: {r.get('href', 'N/A')}\n"
-                f"    {r.get('body', 'No snippet')}"
-            )
-        return "\n\n".join(formatted)
+        searx_results = run_searxng_search(query)
+        if searx_results:
+            return _format_search_results(searx_results)
+        errors.append("SearXNG returned no results.")
     except Exception as e:
-        return f"Search error: {e}"
+        errors.append(f"SearXNG error: {e}")
+
+    try:
+        ddg_results = run_duckduckgo_search(query)
+        if ddg_results:
+            return _format_search_results(ddg_results)
+        errors.append("DuckDuckGo returned no results.")
+    except Exception as e:
+        errors.append(f"DuckDuckGo error: {e}")
+
+    return "Search error: " + " | ".join(errors)
 
 
 @tool
 def news_search(query: str) -> str:
     """Search for recent news articles. Returns headlines with dates, sources, and summaries."""
     try:
-        # Try multiple query variations for better coverage
-        all_results = []
-        queries = [query]
-
-        # Add region-specific variation if not already present
-        query_lower = query.lower()
-        if "turkey" not in query_lower and "türkiye" not in query_lower:
-            # Check if it's a Turkish city/topic
-            turkish_cities = ["istanbul", "ankara", "izmir", "antalya", "bursa"]
-            if any(city in query_lower for city in turkish_cities):
-                queries.append(f"{query} Turkey")
-
-        for q in queries:
-            # Try past day first, then week, then month
-            for period in ["d", "w", "m"]:
-                if len(all_results) >= 10:
-                    break
-                try:
-                    with DDGS() as ddgs:
-                        results = list(ddgs.news(q, max_results=10, timelimit=period))
-                    if results:
-                        # Deduplicate by title
-                        existing_titles = {r.get("title", "") for r in all_results}
-                        for r in results:
-                            if r.get("title", "") not in existing_titles:
-                                all_results.append(r)
-                                existing_titles.add(r.get("title", ""))
-                        if len(all_results) >= 5:
-                            break  # Got enough results
-                except Exception:
-                    continue
-
-        if not all_results:
+        results = run_searxng_news_search(query)
+        if not results:
             return "No news results found."
 
-        # Sort by date (most recent first) and limit to top 10
-        all_results = all_results[:10]
-
         formatted = []
-        for i, r in enumerate(all_results, 1):
-            date = r.get("date", "Unknown date")
-            source = r.get("source", "Unknown source")
+        for i, item in enumerate(results, 1):
             formatted.append(
-                f"[{i}] {r.get('title', 'No title')}\n"
-                f"    Date: {date} | Source: {source}\n"
-                f"    URL: {r.get('url', 'N/A')}\n"
-                f"    {r.get('body', 'No snippet')}"
+                f"[{i}] {_clean_text(item.get('title')) or 'No title'}\n"
+                f"    Date: {_clean_text(item.get('date')) or 'Unknown date'} | Source: {_clean_text(item.get('source')) or 'Unknown source'}\n"
+                f"    URL: {_normalize_text(item.get('url')) or 'N/A'}\n"
+                f"    {_clean_text(item.get('snippet')) or 'No snippet'}"
             )
         return "\n\n".join(formatted)
     except Exception as e:

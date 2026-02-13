@@ -4,7 +4,7 @@ from datetime import datetime
 from colorama import Fore, Style
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from src.llm_engine import ModelSelector
-from src.tools import web_search, news_search, python_repl
+from src.tools import web_search, news_search, python_repl, searxng_search, duckduckgo_search
 
 # ─── Prompts ────────────────────────────────────────────────────────────────
 
@@ -31,7 +31,9 @@ Rules:
 RESEARCHER_PROMPT = """/no_think
 You are a research agent with search tools. Pick the RIGHT tool:
 - news_search: for news, current events, headlines
-- web_search: for general facts, how-to, definitions
+- searxng_search: for private/general web search via SearXNG
+- duckduckgo_search: for DuckDuckGo web search
+- web_search: default search (SearXNG first, DuckDuckGo fallback)
 
 Return findings with sources. Do NOT make up information. Be brief and factual."""
 
@@ -221,7 +223,9 @@ def research_agent(state: dict) -> dict:
         return {"research_output": str(result)}
 
     # For data/other queries, let the LLM pick the tool
-    llm = ModelSelector.get_model("researcher").bind_tools([web_search, news_search])
+    llm = ModelSelector.get_model("researcher").bind_tools(
+        [web_search, searxng_search, duckduckgo_search, news_search]
+    )
     instruction = f"Search for information about: {topic}"
 
     messages = [
@@ -232,7 +236,12 @@ def research_agent(state: dict) -> dict:
     ai_msg = llm.invoke(messages)
     messages.append(ai_msg)
 
-    _research_tools = {"web_search": web_search, "news_search": news_search}
+    _research_tools = {
+        "web_search": web_search,
+        "searxng_search": searxng_search,
+        "duckduckgo_search": duckduckgo_search,
+        "news_search": news_search,
+    }
 
     if ai_msg.tool_calls:
         for tc in ai_msg.tool_calls:
