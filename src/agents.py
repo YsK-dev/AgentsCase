@@ -1,5 +1,6 @@
 # src/agents.py
 import json
+from datetime import datetime
 from colorama import Fore, Style
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from src.llm_engine import ModelSelector
@@ -38,16 +39,100 @@ ANALYST_PROMPT = """/no_think
 You are a data analyst. Analyze data using Python code when calculations are needed.
 Focus on numbers, trends, and comparisons. Be precise."""
 
-EDITOR_PROMPT = """/no_think
-You are a senior editor. Write a clear, professional answer using ONLY the research data provided.
+# ─── Query-type specific editor prompts ─────────────────────────────────────
 
-Rules:
-- Include specific dates, sources, and URLs from the research
-- Structure with bullet points or numbered list for news
-- Do NOT add information not in the research data
+EDITOR_PROMPT_NEWS = """You are a professional news editor. Write a comprehensive news report based on the research data provided.
+
+FORMAT YOUR REPORT EXACTLY LIKE THIS:
+
+# [Topic] — News Report
+**Date:** [today's date]
+
+## Key Headlines
+
+1. **[Headline]** — [1-2 sentence summary with key details]
+   - Source: [source name] | Date: [date]
+
+2. **[Headline]** — [1-2 sentence summary with key details]
+   - Source: [source name] | Date: [date]
+
+[Continue for all major stories]
+
+## Analysis & Context
+[2-3 sentences providing broader context or connecting themes across the stories]
+
+## Sources
+[List all source URLs]
+
+---
+
+RULES:
+- Use ONLY information from the research data — do NOT invent facts
+- Include ALL relevant stories from the data
+- Each headline must have a date and source
+- Write professionally and objectively
+- If data mentions specific numbers, quotes, or names, include them"""
+
+EDITOR_PROMPT_FINANCIAL = """You are a financial analyst editor. Write a professional financial report based on the research data.
+
+FORMAT YOUR REPORT EXACTLY LIKE THIS:
+
+# Financial Report: [Topic]
+**Date:** [today's date]
+
+## Market Overview
+[Summary of key financial data points]
+
+## Key Developments
+1. **[Development]** — [Details with numbers/percentages]
+   - Source: [source] | Date: [date]
+
+## Data Points
+| Metric | Value | Change |
+|--------|-------|--------|
+[Fill from research data]
+
+## Outlook & Analysis
+[2-3 sentences on implications]
+
+## Sources
+[List all URLs]
+
+---
+
+RULES:
+- Focus on numbers, percentages, and financial metrics
+- Use ONLY data from the research — do NOT invent figures
+- Be precise with financial terminology"""
+
+EDITOR_PROMPT_FACTUAL = """You are a senior editor. Write a clear, well-structured answer based on the research data.
+
+FORMAT:
+- Start with a direct answer to the question
+- Use headers (##) to organize sections if the topic is complex
+- Include relevant details, examples, and explanations
+- Cite sources with URLs where available
+- End with a brief summary or key takeaway
+
+RULES:
+- Use ONLY information from the research data
 - Do NOT mention internal processes or tools
-- Keep response under 400 words
-- Start directly with the answer, no preamble"""
+- Be thorough but concise (300-600 words)
+- Write professionally"""
+
+EDITOR_PROMPT_GENERAL = """You are a senior editor. Write a thoughtful, well-organized response.
+
+- Structure your response with clear sections
+- Be informative and engaging
+- If research data is provided, incorporate it naturally
+- Keep response focused and professional (200-400 words)"""
+
+EDITOR_PROMPTS = {
+    "news": EDITOR_PROMPT_NEWS,
+    "data": EDITOR_PROMPT_FINANCIAL,
+    "factual": EDITOR_PROMPT_FACTUAL,
+    "general": EDITOR_PROMPT_GENERAL,
+}
 
 
 # ─── Supervisor ─────────────────────────────────────────────────────────────
@@ -113,7 +198,6 @@ def research_agent(state: dict) -> dict:
     print(f"\n{Fore.YELLOW}┌─ RESEARCHER ({model_name}){Style.RESET_ALL}")
 
     # For news queries, call news_search directly — don't rely on small LLMs
-    # to pick the right tool. This is faster and more reliable.
     if query_type == "news":
         print(f"{Fore.YELLOW}│  🔧 Tool: news_search (direct, query_type=news){Style.RESET_ALL}")
         result = news_search.invoke({"query": topic})
@@ -122,14 +206,13 @@ def research_agent(state: dict) -> dict:
         # If news_search returned nothing useful, fallback to web_search
         if "No news results found" in str(result):
             print(f"{Fore.YELLOW}│  ⚠️  No news found, falling back to web_search{Style.RESET_ALL}")
-            result = web_search.invoke({"query": f"{topic} latest news 2026"})
+            result = web_search.invoke({"query": f"{topic} latest news"})
             print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of web results{Style.RESET_ALL}")
 
         print(f"{Fore.YELLOW}└──────────────────────────────{Style.RESET_ALL}")
-        # Return raw search results directly — no LLM summarization needed
         return {"research_output": str(result)}
 
-    # For factual queries, also call web_search directly for speed
+    # For factual queries, call web_search directly for speed
     if query_type == "factual":
         print(f"{Fore.YELLOW}│  🔧 Tool: web_search (direct, query_type=factual){Style.RESET_ALL}")
         result = web_search.invoke({"query": topic})
@@ -149,7 +232,6 @@ def research_agent(state: dict) -> dict:
     ai_msg = llm.invoke(messages)
     messages.append(ai_msg)
 
-    # Tool dispatch map for researcher
     _research_tools = {"web_search": web_search, "news_search": news_search}
 
     if ai_msg.tool_calls:
@@ -167,7 +249,6 @@ def research_agent(state: dict) -> dict:
         final = llm.invoke(messages)
         output = final.content
     else:
-        # Fallback: if LLM didn't call a tool, do it ourselves
         print(f"{Fore.YELLOW}│  (LLM skipped tool call — executing web_search directly){Style.RESET_ALL}")
         result = web_search.invoke({"query": topic})
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of results{Style.RESET_ALL}")
@@ -221,25 +302,36 @@ def analyst_agent(state: dict) -> dict:
 # ─── Editor ─────────────────────────────────────────────────────────────────
 
 def editor_agent(state: dict) -> dict:
-    """Synthesizes all gathered information into a final answer."""
+    """Synthesizes all gathered information into a professional report."""
     topic = state["topic"]
+    query_type = state.get("query_type", "general")
     research = state.get("research_output", "")
     analysis = state.get("analysis_output", "")
     model_name = ModelSelector.get_model_name("editor")
 
     print(f"\n{Fore.GREEN}┌─ EDITOR ({model_name}){Style.RESET_ALL}")
+    print(f"{Fore.GREEN}│  Report type: {query_type}{Style.RESET_ALL}")
     print(f"{Fore.GREEN}│  Writing final report...{Style.RESET_ALL}")
 
     llm = ModelSelector.get_model("editor")
 
-    context_parts = [f"User question: {topic}"]
+    # Select the right prompt template based on query type
+    editor_prompt = EDITOR_PROMPTS.get(query_type, EDITOR_PROMPT_GENERAL)
+
+    # Build context with metadata
+    today = datetime.now().strftime("%B %d, %Y")
+    context_parts = [
+        f"Today's date: {today}",
+        f"User question: {topic}",
+        f"Report type: {query_type}",
+    ]
     if research:
-        context_parts.append(f"Research findings:\n{research}")
+        context_parts.append(f"\n--- RESEARCH DATA ---\n{research}\n--- END RESEARCH DATA ---")
     if analysis:
-        context_parts.append(f"Data analysis:\n{analysis}")
+        context_parts.append(f"\n--- ANALYSIS DATA ---\n{analysis}\n--- END ANALYSIS DATA ---")
 
     messages = [
-        SystemMessage(content=EDITOR_PROMPT),
+        SystemMessage(content=editor_prompt),
         HumanMessage(content="\n\n".join(context_parts)),
     ]
 

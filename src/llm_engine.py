@@ -7,10 +7,10 @@ class ModelSelector:
     Selects the best model for each agent role.
 
     Strategy:
-    - supervisor : High reasoning, low hallucination → qwen3-4b-thinking (structured JSON output)
-    - researcher : Fast, lightweight text generation → qwen3:1.7b (thinking disabled)
-    - analyst   : Code generation & data work      → deepseek-coder:1.3b
-    - editor    : Fast synthesis                    → qwen3:1.7b (thinking disabled)
+    - supervisor : High reasoning → qwen3-4b-thinking (structured JSON routing)
+    - researcher : Fast, lightweight → qwen3:1.7b (mostly bypassed for direct tool calls)
+    - analyst   : Code generation  → deepseek-coder:1.3b
+    - editor    : Quality reports  → qwen3-4b-thinking (best writing quality)
     """
 
     # (model_name, temperature, extra_kwargs)
@@ -18,7 +18,7 @@ class ModelSelector:
         "supervisor": ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.0, {}),
         "researcher": ("qwen3:1.7b", 0.3, {"num_predict": 512}),
         "analyst":    ("deepseek-coder:1.3b", 0.3, {}),
-        "editor":     ("qwen3:1.7b", 0.3, {"num_predict": 2048}),
+        "editor":     ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.3, {"num_predict": 4096}),
     }
 
     @staticmethod
