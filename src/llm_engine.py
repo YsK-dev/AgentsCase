@@ -3,6 +3,9 @@ import re
 from typing import Any, Dict, List, Optional
 
 from langchain_ollama import ChatOllama
+from src.logger import get_logger, log_event
+
+_log = get_logger("llm_engine")
 
 
 def _dedupe_keep_order(items: List[str]) -> List[str]:
@@ -103,8 +106,10 @@ class RoutedChatModel:
 
                 errors.append(f"{model_name}: empty response")
             except Exception as exc:
+                _log.warning("Model %s failed: %s", model_name, exc)
                 errors.append(f"{model_name}: {exc}")
 
+        _log.error("All candidate models failed: %s", errors)
         raise RuntimeError("All candidate local models failed. " + " | ".join(errors))
 
 
@@ -197,6 +202,8 @@ class ModelSelector:
             query_type=query_type,
             mode=mode,
         )
+        log_event(_log, "model_selected", role=role, candidates=candidates,
+                  query_type=query_type, temperature=temperature)
         return RoutedChatModel(candidates, temperature=temperature, extra_kwargs=kwargs)
 
     @staticmethod

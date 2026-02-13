@@ -16,3 +16,4 @@ langgraph
 matplotlib
 colorama
 langchain-experimental
+pytest

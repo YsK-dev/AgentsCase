@@ -8,6 +8,9 @@ from colorama import Fore, Style
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from src.llm_engine import ModelSelector
 from src.tools import web_search, news_search, python_repl, searxng_search, duckduckgo_search
+from src.logger import get_logger, log_event
+
+_log = get_logger("agents")
 
 # ─── Prompts ────────────────────────────────────────────────────────────────
 
@@ -147,23 +150,25 @@ EDITOR_PROMPTS = {
 
 def _classify_query_heuristic(topic: str) -> tuple[List[str], str, str]:
     q = topic.lower()
+    # Use word-boundary matching to avoid false positives from substrings
+    words = set(re.findall(r'\b[a-z]+\b', q))
 
-    news_keywords = [
+    news_keywords = {
         "latest", "today", "headline", "news", "breaking", "update", "recent", "yesterday",
-    ]
-    data_keywords = [
+    }
+    data_keywords = {
         "compare", "comparison", "vs", "versus", "calculate", "analysis", "trend",
         "statistics", "data", "metric", "percentage", "ratio", "forecast",
-    ]
-    general_keywords = [
+    }
+    general_keywords = {
         "poem", "story", "joke", "creative", "opinion", "brainstorm",
-    ]
+    }
 
-    if any(k in q for k in data_keywords):
+    if words & data_keywords:
         return ["researcher", "analyst", "editor"], "data", "heuristic:data keyword"
-    if any(k in q for k in news_keywords):
+    if words & news_keywords:
         return ["researcher", "editor"], "news", "heuristic:news keyword"
-    if any(k in q for k in general_keywords):
+    if words & general_keywords:
         return ["editor"], "general", "heuristic:general keyword"
     return ["researcher", "editor"], "factual", "heuristic:default factual"
 
@@ -261,6 +266,8 @@ def supervisor_agent(state: dict) -> dict:
         print(f"{Fore.MAGENTA}│  Query type: {query_type}{Style.RESET_ALL}")
         print(f"{Fore.MAGENTA}│  Reason: {reason}{Style.RESET_ALL}")
         print(f"{Fore.MAGENTA}└──────────────────────────────{Style.RESET_ALL}")
+        log_event(_log, "supervisor_routed", topic=topic, route=agents,
+                  query_type=query_type, reason=reason, model=model_name)
         return {"route": agents, "query_type": query_type}
 
     llm = ModelSelector.get_model(
@@ -299,10 +306,13 @@ def supervisor_agent(state: dict) -> dict:
         if reason:
             print(f"{Fore.MAGENTA}│  Reason: {reason}{Style.RESET_ALL}")
         print(f"{Fore.MAGENTA}└──────────────────────────────{Style.RESET_ALL}")
+        log_event(_log, "supervisor_routed", topic=topic, route=agents,
+                  query_type=query_type, reason=reason, model=model_name, mode="llm")
 
     except Exception as e:
         print(f"{Fore.RED}│  Routing failed ({e}), using default pipeline{Style.RESET_ALL}")
         print(f"{Fore.MAGENTA}└──────────────────────────────{Style.RESET_ALL}")
+        _log.error("Supervisor LLM routing failed: %s", e)
         agents = ["researcher", "editor"]
         query_type = "factual"
 
@@ -329,12 +339,17 @@ def research_agent(state: dict) -> dict:
     if query_type == "news":
         print(f"{Fore.YELLOW}│  🔧 Tool: news_search (direct, query_type=news){Style.RESET_ALL}")
         result = news_search.invoke({"query": topic})
+        log_event(_log, "researcher_tool_call", tool="news_search",
+                  args={"query": topic}, result_len=len(str(result)), mode="direct")
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of news results{Style.RESET_ALL}")
 
         # If news_search returned nothing useful, fallback to web_search
         if "No news results found" in str(result):
             print(f"{Fore.YELLOW}│  ⚠️  No news found, falling back to web_search{Style.RESET_ALL}")
             result = web_search.invoke({"query": f"{topic} latest news"})
+            log_event(_log, "researcher_tool_call", tool="web_search",
+                      args={"query": f"{topic} latest news"}, result_len=len(str(result)),
+                      mode="news_fallback")
             print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of web results{Style.RESET_ALL}")
 
         print(f"{Fore.YELLOW}└──────────────────────────────{Style.RESET_ALL}")
@@ -344,6 +359,8 @@ def research_agent(state: dict) -> dict:
     if query_type == "factual":
         print(f"{Fore.YELLOW}│  🔧 Tool: web_search (direct, query_type=factual){Style.RESET_ALL}")
         result = web_search.invoke({"query": topic})
+        log_event(_log, "researcher_tool_call", tool="web_search",
+                  args={"query": topic}, result_len=len(str(result)), mode="direct")
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of results{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}└──────────────────────────────{Style.RESET_ALL}")
         return {"research_output": str(result)}
@@ -381,6 +398,8 @@ def research_agent(state: dict) -> dict:
 
             selected_tool = _research_tools.get(tool_name, web_search)
             result = selected_tool.invoke(tool_args)
+            log_event(_log, "researcher_tool_call", tool=tool_name,
+                      args=tool_args, result_len=len(str(result)))
             print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of results{Style.RESET_ALL}")
 
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
@@ -432,6 +451,8 @@ def analyst_agent(state: dict) -> dict:
             print(f"{Fore.BLUE}│  🔧 Tool: {tool_name}(){Style.RESET_ALL}")
 
             result = python_repl.invoke(tc["args"])
+            log_event(_log, "analyst_tool_call", tool=tool_name,
+                      result_preview=str(result)[:200])
             print(f"{Fore.BLUE}│  📊 Code output: {str(result)[:120]}{Style.RESET_ALL}")
 
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
@@ -485,10 +506,12 @@ def editor_agent(state: dict) -> dict:
     if analysis:
         context_parts.append(f"\n--- ANALYSIS DATA ---\n{analysis}\n--- END ANALYSIS DATA ---")
 
-    editor_mode = os.getenv("EDITOR_MODE", "deterministic").lower()
+    editor_mode = os.getenv("EDITOR_MODE", "llm").lower()
     if editor_mode == "deterministic" and query_type in {"news", "factual", "data"}:
         print(f"{Fore.GREEN}│  Mode: deterministic report synthesis{Style.RESET_ALL}")
         content = _build_fallback_report(topic, query_type, research, analysis)
+        log_event(_log, "editor_output", mode="deterministic", query_type=query_type,
+                  report_len=len(content), model=model_name)
         print(f"{Fore.GREEN}└──────────────────────────────{Style.RESET_ALL}")
         return {"final_report": content}
 
@@ -527,7 +550,10 @@ def editor_agent(state: dict) -> dict:
         print(
             f"{Fore.GREEN}│  ⚠️  Model output unusable, generating structured fallback report...{Style.RESET_ALL}"
         )
+        _log.warning("Editor LLM output unusable, falling back to deterministic report")
         content = _build_fallback_report(topic, query_type, research, analysis)
 
+    log_event(_log, "editor_output", mode=editor_mode, query_type=query_type,
+              report_len=len(content), model=model_name)
     print(f"{Fore.GREEN}└──────────────────────────────{Style.RESET_ALL}")
     return {"final_report": content}
