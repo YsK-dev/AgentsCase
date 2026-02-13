@@ -1,4 +1,6 @@
 # src/llm_engine.py
+import os
+
 from langchain_ollama import ChatOllama
 
 
@@ -7,18 +9,26 @@ class ModelSelector:
     Selects the best model for each agent role.
 
     Strategy:
-    - supervisor : High reasoning → qwen3-4b-thinking (structured JSON routing)
-    - researcher : Fast, lightweight → qwen3:1.7b (mostly bypassed for direct tool calls)
+    - supervisor : Structured routing → deepseek-coder:1.3b
+    - researcher : Fast tool orchestration → deepseek-coder:1.3b
     - analyst   : Code generation  → deepseek-coder:1.3b
-    - editor    : Quality reports  → qwen3-4b-thinking (best writing quality)
+    - editor    : Stable text generation → deepseek-coder:1.3b
     """
 
     # (model_name, temperature, extra_kwargs)
+    SUPERVISOR_MODEL = os.getenv("MODEL_SUPERVISOR", "deepseek-coder:1.3b")
+    RESEARCHER_MODEL = os.getenv("MODEL_RESEARCHER", "deepseek-coder:1.3b")
+    ANALYST_MODEL = os.getenv("MODEL_ANALYST", "deepseek-coder:1.3b")
+    EDITOR_MODEL = os.getenv(
+        "MODEL_EDITOR",
+        "deepseek-coder:1.3b",
+    )
+
     MODELS = {
-        "supervisor": ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.0, {}),
-        "researcher": ("qwen3:1.7b", 0.3, {"num_predict": 512}),
-        "analyst":    ("deepseek-coder:1.3b", 0.3, {}),
-        "editor":     ("pielee/qwen3-4b-thinking-2507_q8:latest", 0.3, {}),
+        "supervisor": (SUPERVISOR_MODEL, 0.0, {"num_predict": 256}),
+        "researcher": (RESEARCHER_MODEL, 0.3, {"num_predict": 512}),
+        "analyst":    (ANALYST_MODEL, 0.3, {"num_predict": 512}),
+        "editor":     (EDITOR_MODEL, 0.3, {"num_predict": 512}),
     }
 
     @staticmethod

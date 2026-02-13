@@ -1,5 +1,6 @@
 # src/graph.py
-from typing import TypedDict, List
+import time
+from typing import Dict, List, NotRequired, TypedDict
 from langgraph.graph import StateGraph, END
 from src.agents import supervisor_agent, research_agent, analyst_agent, editor_agent
 
@@ -11,6 +12,27 @@ class AgentState(TypedDict):
     research_output: str
     analysis_output: str
     final_report: str
+    timings: NotRequired[Dict[str, float]]
+
+
+def _timed_node(node_name: str, node_fn):
+    """Wrap a node and persist elapsed milliseconds in state['timings']."""
+
+    def wrapped(state: AgentState):
+        start = time.perf_counter()
+        output = node_fn(state)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        timings = dict(state.get("timings", {}))
+        returned_timings = output.get("timings")
+        if isinstance(returned_timings, dict):
+            timings.update(returned_timings)
+        timings[node_name] = elapsed_ms
+
+        output["timings"] = timings
+        return output
+
+    return wrapped
 
 
 def _route_after_supervisor(state: AgentState) -> str:
@@ -35,10 +57,10 @@ def build_graph():
     workflow = StateGraph(AgentState)
 
     # Add all nodes
-    workflow.add_node("supervisor", supervisor_agent)
-    workflow.add_node("researcher", research_agent)
-    workflow.add_node("analyst", analyst_agent)
-    workflow.add_node("editor", editor_agent)
+    workflow.add_node("supervisor", _timed_node("supervisor", supervisor_agent))
+    workflow.add_node("researcher", _timed_node("researcher", research_agent))
+    workflow.add_node("analyst", _timed_node("analyst", analyst_agent))
+    workflow.add_node("editor", _timed_node("editor", editor_agent))
 
     # Entry: always start with supervisor
     workflow.set_entry_point("supervisor")

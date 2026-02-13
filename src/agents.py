@@ -1,6 +1,9 @@
 # src/agents.py
 import json
+import os
+import re
 from datetime import datetime
+from typing import Dict, List
 from colorama import Fore, Style
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from src.llm_engine import ModelSelector
@@ -8,7 +11,8 @@ from src.tools import web_search, news_search, python_repl, searxng_search, duck
 
 # ─── Prompts ────────────────────────────────────────────────────────────────
 
-SUPERVISOR_PROMPT = """You are a task router. Given a user query, decide which agents are needed.
+SUPERVISOR_PROMPT = """/no_think
+You are a task router. Given a user query, decide which agents are needed.
 
 Reply with ONLY a JSON object (no markdown, no explanation) in this exact format:
 {"agents": ["researcher", "editor"], "query_type": "news", "reason": "short reason"}
@@ -43,7 +47,8 @@ Focus on numbers, trends, and comparisons. Be precise."""
 
 # ─── Query-type specific editor prompts ─────────────────────────────────────
 
-EDITOR_PROMPT_NEWS = """You are a professional news editor. Write a comprehensive news report based on the research data provided.
+EDITOR_PROMPT_NEWS = """/no_think
+You are a professional news editor. Write a comprehensive news report based on the research data provided.
 
 FORMAT YOUR REPORT EXACTLY LIKE THIS:
 
@@ -75,7 +80,8 @@ RULES:
 - Write professionally and objectively
 - If data mentions specific numbers, quotes, or names, include them"""
 
-EDITOR_PROMPT_FINANCIAL = """You are a financial analyst editor. Write a professional financial report based on the research data.
+EDITOR_PROMPT_FINANCIAL = """/no_think
+You are a financial analyst editor. Write a professional financial report based on the research data.
 
 FORMAT YOUR REPORT EXACTLY LIKE THIS:
 
@@ -107,7 +113,8 @@ RULES:
 - Use ONLY data from the research — do NOT invent figures
 - Be precise with financial terminology"""
 
-EDITOR_PROMPT_FACTUAL = """You are a senior editor. Write a clear, well-structured answer based on the research data.
+EDITOR_PROMPT_FACTUAL = """/no_think
+You are a senior editor. Write a clear, well-structured answer based on the research data.
 
 FORMAT:
 - Start with a direct answer to the question
@@ -122,7 +129,8 @@ RULES:
 - Be thorough but concise (300-600 words)
 - Write professionally"""
 
-EDITOR_PROMPT_GENERAL = """You are a senior editor. Write a thoughtful, well-organized response.
+EDITOR_PROMPT_GENERAL = """/no_think
+You are a senior editor. Write a thoughtful, well-organized response.
 
 - Structure your response with clear sections
 - Be informative and engaging
@@ -137,6 +145,101 @@ EDITOR_PROMPTS = {
 }
 
 
+def _classify_query_heuristic(topic: str) -> tuple[List[str], str, str]:
+    q = topic.lower()
+
+    news_keywords = [
+        "latest", "today", "headline", "news", "breaking", "update", "recent", "yesterday",
+    ]
+    data_keywords = [
+        "compare", "comparison", "vs", "versus", "calculate", "analysis", "trend",
+        "statistics", "data", "metric", "percentage", "ratio", "forecast",
+    ]
+    general_keywords = [
+        "poem", "story", "joke", "creative", "opinion", "brainstorm",
+    ]
+
+    if any(k in q for k in data_keywords):
+        return ["researcher", "analyst", "editor"], "data", "heuristic:data keyword"
+    if any(k in q for k in news_keywords):
+        return ["researcher", "editor"], "news", "heuristic:news keyword"
+    if any(k in q for k in general_keywords):
+        return ["editor"], "general", "heuristic:general keyword"
+    return ["researcher", "editor"], "factual", "heuristic:default factual"
+
+
+def _parse_research_items(research: str, max_items: int = 8) -> List[Dict[str, str]]:
+    blocks = re.findall(r"(?ms)^\[(\d+)\]\s+(.*?)(?=^\[\d+\]\s+|\Z)", research)
+    items: List[Dict[str, str]] = []
+
+    for _, block in blocks:
+        lines = [ln.strip() for ln in block.strip().splitlines() if ln.strip()]
+        if not lines:
+            continue
+
+        title = lines[0]
+        url = ""
+        date = ""
+        source = ""
+        snippet_parts = []
+
+        for ln in lines[1:]:
+            if ln.startswith("URL:"):
+                url = ln.replace("URL:", "", 1).strip()
+            elif ln.startswith("Date:"):
+                meta = ln.replace("Date:", "", 1).strip()
+                if "| Source:" in meta:
+                    date, source = [x.strip() for x in meta.split("| Source:", 1)]
+                else:
+                    date = meta
+            else:
+                snippet_parts.append(ln)
+
+        items.append(
+            {
+                "title": title,
+                "url": url,
+                "date": date,
+                "source": source,
+                "snippet": " ".join(snippet_parts).strip(),
+            }
+        )
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _build_fallback_report(topic: str, query_type: str, research: str, analysis: str) -> str:
+    items = _parse_research_items(research, max_items=8)
+    lines = [f"Based on current search results for: {topic}"]
+
+    if query_type == "news":
+        lines.append("\n## Key Headlines")
+    else:
+        lines.append("\n## Findings")
+
+    if items:
+        for i, item in enumerate(items, 1):
+            lines.append(f"\n{i}. {item['title']}")
+            if item["date"] or item["source"]:
+                lines.append(f"   - Date: {item['date'] or 'Unknown'} | Source: {item['source'] or 'Unknown'}")
+            if item["snippet"]:
+                lines.append(f"   - {item['snippet']}")
+            if item["url"]:
+                lines.append(f"   - URL: {item['url']}")
+    else:
+        lines.append("\nNo structured results were available.")
+        if research:
+            lines.append("\nRaw research data:")
+            lines.append(research[:2500])
+
+    if analysis:
+        lines.append("\n## Analysis")
+        lines.append(analysis[:1500])
+
+    return "\n".join(lines).strip()
+
+
 # ─── Supervisor ─────────────────────────────────────────────────────────────
 
 def supervisor_agent(state: dict) -> dict:
@@ -146,6 +249,15 @@ def supervisor_agent(state: dict) -> dict:
 
     print(f"\n{Fore.MAGENTA}┌─ SUPERVISOR ({model_name}){Style.RESET_ALL}")
     print(f"{Fore.MAGENTA}│  Classifying query...{Style.RESET_ALL}")
+
+    # Fast and robust default: deterministic keyword router.
+    if os.getenv("SUPERVISOR_MODE", "heuristic").lower() == "heuristic":
+        agents, query_type, reason = _classify_query_heuristic(topic)
+        print(f"{Fore.MAGENTA}│  Route: {' → '.join(agents)}{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}│  Query type: {query_type}{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}│  Reason: {reason}{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}└──────────────────────────────{Style.RESET_ALL}")
+        return {"route": agents, "query_type": query_type}
 
     llm = ModelSelector.get_model("supervisor")
     messages = [
@@ -339,6 +451,13 @@ def editor_agent(state: dict) -> dict:
     if analysis:
         context_parts.append(f"\n--- ANALYSIS DATA ---\n{analysis}\n--- END ANALYSIS DATA ---")
 
+    editor_mode = os.getenv("EDITOR_MODE", "deterministic").lower()
+    if editor_mode == "deterministic" and query_type in {"news", "factual", "data"}:
+        print(f"{Fore.GREEN}│  Mode: deterministic report synthesis{Style.RESET_ALL}")
+        content = _build_fallback_report(topic, query_type, research, analysis)
+        print(f"{Fore.GREEN}└──────────────────────────────{Style.RESET_ALL}")
+        return {"final_report": content}
+
     messages = [
         SystemMessage(content=editor_prompt),
         HumanMessage(content="\n\n".join(context_parts)),
@@ -346,18 +465,35 @@ def editor_agent(state: dict) -> dict:
 
     response = llm.invoke(messages)
 
-    # Extract content - handle different response types
-    if hasattr(response, 'content'):
-        content = response.content
-    elif hasattr(response, 'text'):
-        content = response.text
-    else:
-        content = str(response)
+    def _extract_text(resp) -> str:
+        if hasattr(resp, "content"):
+            text = resp.content
+        elif hasattr(resp, "text"):
+            text = resp.text
+        else:
+            text = str(resp)
 
-    # Strip any <think>...</think> blocks from the response
-    if "<think>" in content:
-        import re
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        if "<think>" in text:
+            import re
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return text.strip()
+
+    content = _extract_text(response)
+    lower_content = content.lower()
+    bad_patterns = [
+        "i don't have real-time access",
+        "i do not have real-time access",
+        "i cannot browse",
+        "i can't browse",
+        "as an ai",
+    ]
+
+    # Use deterministic fallback when model returns empty or generic refusal text.
+    if not content or any(p in lower_content for p in bad_patterns):
+        print(
+            f"{Fore.GREEN}│  ⚠️  Model output unusable, generating structured fallback report...{Style.RESET_ALL}"
+        )
+        content = _build_fallback_report(topic, query_type, research, analysis)
 
     print(f"{Fore.GREEN}└──────────────────────────────{Style.RESET_ALL}")
     return {"final_report": content}

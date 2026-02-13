@@ -1,45 +1,51 @@
-# Search Benchmark Report
+# Search + Runtime Benchmark (Post-Fix)
 
 **Date:** February 13, 2026  
-**Command:** `venv/bin/python benchmark_search.py --repeats 3 --max-results 5`
+**Environment:** local Ollama + SearXNG endpoint (`http://13.60.59.170/search`)
 
-## Scope
+## What Was Fixed
 
-Comparison between:
-- `SearXNG` (`http://13.60.59.170/search`)
-- `DuckDuckGo` tool path after reliability fixes
-We saw Searxng was way better most of time issue before was related to ddg not responding or just respond 202, 400 errors which at first cause ddg to be faster but worse content
+1. Added **demo timing tracking** (per-stage + total runtime).
+2. Replaced fragile supervisor LLM routing with a **deterministic heuristic router** (`SUPERVISOR_MODE=heuristic` default).
+3. Switched editor for `news/factual/data` to **deterministic synthesis** from collected search results (`EDITOR_MODE=deterministic` default).
+4. Improved search relevance with query-aware **result reranking** in `src/tools.py`.
 
-DuckDuckGo execution order in code:
-1. Direct DuckDuckGo HTML/Lite endpoints
-2. SearXNG with `engines=duckduckgo`
-3. Mirror fallback via `r.jina.ai` when direct DDG is blocked jina acts like a layerbetween url and llm 
+## Demo Timing Evidence
 
-This fallback chain was added because direct DDG frequently returns anti-bot responses (`HTTP 202/403`) from this runtime.
+### Query: `latest NVIDIA earnings results`
+- `supervisor`: `0.4 ms`
+- `researcher`: `3836.2 ms`
+- `editor`: `34.4 ms`
+- `total`: `3876.1 ms`
 
-## Results Summary
+### Query: `how to optimize python list comprehension performance`
+- `supervisor`: `0.1 ms`
+- `researcher`: `3349.3 ms`
+- `editor`: `35.3 ms`
+- `total`: `3388.5 ms`
+
+These runs confirm the main latency is now search/network, not LLM routing/editor generation stalls.
+
+## Search Benchmark (Latest Run)
+
+**Command**
+```bash
+venv/bin/python benchmark_search.py --repeats 2 --max-results 5
+```
+
+### Summary
 
 | Engine | Avg Latency (ms) | Success-Only Latency (ms) | Avg Relevance | Query Success Rate |
 |---|---:|---:|---:|---:|
-| SearXNG | 1307.8 | 1440.4 | 0.803 | 100% |
-| DuckDuckGo | 4062.0 | 4213.1 | 0.803 | 100% |
+| SearXNG | 1617.1 | 1617.1 | 0.854 | 100% |
+| DuckDuckGo | 4038.4 | 4038.4 | 0.752 | 100% |
 
-**Winner (this run):**
+### Winner
 - Speed: **SearXNG**
 - Accuracy proxy: **SearXNG**
 - Reliability: **SearXNG**
 
-## Per-Query Breakdown
-
-| Query | SearXNG Median ms | SearXNG Results | SearXNG Rel | DuckDuckGo Median ms | DuckDuckGo Results | DuckDuckGo Rel |
-|---|---:|---:|---:|---:|---:|---:|
-| latest NVIDIA earnings results | 1108.4 | 5.00 | 0.67 | 2744.0 | 5.00 | 0.67 |
-| LangChain tool calling tutorial | 703.4 | 5.00 | 0.75 | 5649.1 | 5.00 | 0.75 |
-| how to optimize python list comprehension performance | 1024.6 | 5.00 | 0.60 | 3372.8 | 5.00 | 0.60 |
-| AWS EC2 pricing calculator | 3148.6 | 5.00 | 1.00 | 5696.9 | 5.00 | 1.00 |
-| best practices for PostgreSQL indexing | 554.0 | 5.00 | 1.00 | 2847.4 | 5.00 | 1.00 |
-
 ## Notes
 
-- DuckDuckGo now returns the requested result depth (`5`) in this run, with anti-bot handling and fallback logic enabled.
-- Relevance is a keyword-overlap proxy from `benchmark_search.py`; it is useful for relative comparison but not a full semantic quality metric.
+- DuckDuckGo path is now stable but still slower in this environment due anti-bot handling/fallback chain.
+- Deterministic editor mode avoids empty/incorrect model-generated summaries and makes output timing predictable.

@@ -1,5 +1,6 @@
 # demo.py — Interactive Multi-Agent CLI with Smart Routing
 import sys
+import time
 from colorama import Fore, Style, init
 from src.graph import build_graph
 
@@ -19,15 +20,25 @@ def run_query(app, user_query: str):
         "research_output": "",
         "analysis_output": "",
         "final_report": "",
+        "timings": {},
     }
 
+    start = time.perf_counter()
     result = app.invoke(initial_state)
+    total_ms = (time.perf_counter() - start) * 1000
 
     # ── Final Output ────────────────────────────────────────────
     print(f"\n{Fore.MAGENTA}{'=' * 60}")
     print("FINAL OUTPUT")
     print(f"{'=' * 60}{Style.RESET_ALL}")
     print(result.get("final_report", "No output generated."))
+    timings = result.get("timings", {})
+    if timings:
+        print(f"\n{Fore.CYAN}Timing Summary{Style.RESET_ALL}")
+        for stage in ["supervisor", "researcher", "analyst", "editor"]:
+            if stage in timings:
+                print(f"  - {stage:10s}: {timings[stage]:8.1f} ms")
+    print(f"{Fore.CYAN}  - {'total':10s}: {total_ms:8.1f} ms{Style.RESET_ALL}")
     print()
 
 

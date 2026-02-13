@@ -33,6 +33,15 @@ USER_AGENT = (
 )
 _DDG_LOCK = threading.Lock()
 _DDG_LAST_REQUEST_TS = 0.0
+_RERANK_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "what", "when", "where",
+    "who", "how", "why", "are", "was", "were", "is", "in", "on", "to", "of", "a",
+    "an", "latest", "best", "news", "today",
+}
+_FOCUS_TERMS = {
+    "python", "langchain", "postgresql", "nvidia", "aws", "docker", "kubernetes",
+    "javascript", "typescript", "java", "golang", "rust", "sql", "linux",
+}
 
 
 class DuckDuckGoRateLimitError(RuntimeError):
@@ -92,6 +101,46 @@ def _format_search_results(results: List[Dict[str, str]]) -> str:
             f"    {snippet}"
         )
     return "\n\n".join(formatted)
+
+
+def _tokenize_for_rank(text: str) -> set:
+    terms = set(re.findall(r"[a-z0-9]{3,}", text.lower()))
+    return {term for term in terms if term not in _RERANK_STOPWORDS}
+
+
+def _rerank_by_query(query: str, results: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    if not results:
+        return results
+
+    query_terms = _tokenize_for_rank(query)
+    if not query_terms:
+        return results
+    focus_terms = query_terms & _FOCUS_TERMS
+
+    scored = []
+    for idx, item in enumerate(results):
+        haystack = " ".join(
+            [
+                _normalize_text(item.get("title")),
+                _normalize_text(item.get("snippet")),
+                _normalize_text(item.get("url")),
+            ]
+        )
+        terms = _tokenize_for_rank(haystack)
+        overlap = len(query_terms & terms) / len(query_terms) if terms else 0.0
+        focus_overlap = len(focus_terms & terms)
+        score = overlap + (0.4 * focus_overlap)
+        if focus_terms and focus_overlap == 0:
+            score *= 0.5
+        scored.append((score, idx, item))
+
+    # Keep only relevant items when possible; otherwise preserve original list.
+    positive = [row for row in scored if row[0] > 0]
+    if positive:
+        scored = positive
+
+    scored.sort(key=lambda row: (-row[0], row[1]))
+    return [row[2] for row in scored]
 
 
 def _fetch_json(url: str, params: Dict[str, str]) -> Dict[str, Any]:
@@ -298,7 +347,8 @@ def _parse_jina_ddg_markdown(markdown: str, max_results: int) -> List[Dict[str, 
 
 def run_searxng_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
     data = _fetch_json(SEARXNG_URL, {"q": query, "format": "json"})
-    return _parse_searx_results(data, max_results)
+    ranked = _rerank_by_query(query, _parse_searx_results(data, max_results * 2))
+    return ranked[:max_results]
 
 
 def run_searxng_news_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
@@ -355,7 +405,7 @@ def run_duckduckgo_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> 
                 html_doc = _fetch_html(endpoint, timeout=DUCKDUCKGO_TIMEOUT)
                 parser = _DuckDuckGoHTMLParser(max_results=max_results)
                 parser.feed(html_doc)
-                results = _dedupe_results(parser.results)[:max_results]
+                results = _rerank_by_query(query, _dedupe_results(parser.results))[:max_results]
                 if len(results) > len(best_results):
                     best_results = results
                 if len(results) >= max_results:
@@ -377,7 +427,7 @@ def run_duckduckgo_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> 
             SEARXNG_URL,
             {"q": query, "format": "json", "engines": "duckduckgo"},
         )
-        searx_ddg_results = _parse_searx_results(data, max_results)
+        searx_ddg_results = _rerank_by_query(query, _parse_searx_results(data, max_results * 2))[:max_results]
         if len(searx_ddg_results) > len(best_results):
             best_results = searx_ddg_results
         if len(searx_ddg_results) >= max_results:
@@ -389,7 +439,7 @@ def run_duckduckgo_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> 
     try:
         proxy_url = f"{DUCKDUCKGO_PROXY_PREFIX}?{urllib.parse.urlencode({'q': query})}"
         proxy_markdown = _fetch_text(proxy_url, timeout=max(8.0, DUCKDUCKGO_TIMEOUT))
-        proxy_results = _parse_jina_ddg_markdown(proxy_markdown, max_results)
+        proxy_results = _rerank_by_query(query, _parse_jina_ddg_markdown(proxy_markdown, max_results * 2))[:max_results]
         if len(proxy_results) > len(best_results):
             best_results = proxy_results
         if len(proxy_results) >= max_results:

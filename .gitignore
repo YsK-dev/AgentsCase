@@ -1,3 +1,86 @@
+# Virtual environments
+venv/
+.venv/
 
-venv
-.pyc
+# Byte-compiled / optimized / DLL files
+__pycache__/
+src/__pycache__/
+*.__pycache__
+*.pyc
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+ *.cpython
+
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Environment variables / secrets
+.env
+.env.*
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Mypy / pyright caches
+.mypy_cache/
+.pyright/
+
+# Misc
+*.log
+*.sqlite3
+
+# Keep project-specific ignores below
+# (examples: local config files, secret keys, large data files)
+
+# Local / developer files
+.python-version
+local_settings.py
+.env.local
+
+# Databases & caches
+*.db
+*.sqlite3
+.cache/
+
+# Logs, outputs, artifacts
+logs/
+outputs/
+*.log
+
+# Keys and certificates
+*.pem
+*.key
+
+# Language/tooling / build
+node_modules/
+.env.docker
+.terraform/
+env/
+
+# Large data / generated files
+data/
+
