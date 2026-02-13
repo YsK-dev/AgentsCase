@@ -8,11 +8,12 @@
 Comparison between:
 - `SearXNG` (`http://13.60.59.170/search`)
 - `DuckDuckGo` tool path after reliability fixes
+We saw Searxng was way better most of time issue before was related to ddg not responding or just respond 202, 400 errors which at first cause ddg to be faster but worse content
 
 DuckDuckGo execution order in code:
 1. Direct DuckDuckGo HTML/Lite endpoints
 2. SearXNG with `engines=duckduckgo`
-3. Mirror fallback via `r.jina.ai` when direct DDG is blocked
+3. Mirror fallback via `r.jina.ai` when direct DDG is blocked jina acts like a layerbetween url and llm 
 
 This fallback chain was added because direct DDG frequently returns anti-bot responses (`HTTP 202/403`) from this runtime.
 
