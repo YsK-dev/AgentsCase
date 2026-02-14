@@ -46,14 +46,23 @@ def main():
     print(f"{Fore.CYAN}Initializing Multi-Agent System with Smart Routing...{Style.RESET_ALL}")
     print(f"{Fore.CYAN}Building agent graph (supervisor → researcher/analyst → editor)...{Style.RESET_ALL}")
 
-    app = build_graph()
+    try:
+        app = build_graph()
+    except Exception as e:
+        print(f"{Fore.RED}❌ Failed to build agent graph: {e}{Style.RESET_ALL}")
+        print(f"{Fore.RED}Make sure Ollama is running (`ollama serve`) and required models are pulled.{Style.RESET_ALL}")
+        return
 
     print(f"{Fore.GREEN}✓ System ready.{Style.RESET_ALL}\n")
 
     # If a query was passed as CLI argument, run it and exit
     if len(sys.argv) > 1:
         query = " ".join(sys.argv[1:])
-        run_query(app, query)
+        try:
+            run_query(app, query)
+        except Exception as e:
+            print(f"{Fore.RED}❌ Pipeline error: {e}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Check logs/agent_system.log for details.{Style.RESET_ALL}")
         return
 
     # Interactive loop
@@ -68,7 +77,11 @@ def main():
             if not user_input.strip():
                 continue
 
-            run_query(app, user_input.strip())
+            try:
+                run_query(app, user_input.strip())
+            except Exception as e:
+                print(f"{Fore.RED}❌ Pipeline error: {e}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Check logs/agent_system.log for details.{Style.RESET_ALL}")
 
         except KeyboardInterrupt:
             print("\nExiting...")
