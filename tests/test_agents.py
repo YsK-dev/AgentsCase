@@ -1,5 +1,13 @@
 # tests/test_agents.py — Unit tests for agent logic (heuristic classifier & fallback report)
-from src.agents import _classify_query_heuristic, _build_fallback_report, _parse_research_items
+import pytest
+
+from src.agents import (
+    _classify_query_heuristic,
+    _build_fallback_report,
+    _parse_research_items,
+    _resolve_request_model_mode,
+    supervisor_agent,
+)
 
 
 # ─── Heuristic query classifier tests ───────────────────────────────────────
@@ -62,6 +70,33 @@ class TestClassifyQueryHeuristic:
         """The standalone word 'data' should still match."""
         _, qtype, _ = _classify_query_heuristic("show me the data for sales")
         assert qtype == "data"
+
+
+# ─── Input validation tests ────────────────────────────────────────────────
+
+class TestAgentInputValidation:
+
+    def test_resolve_request_model_mode_none(self):
+        assert _resolve_request_model_mode({}) is None
+
+    def test_resolve_request_model_mode_normalizes_case(self):
+        assert _resolve_request_model_mode({"model_mode": "FAST"}) == "fast"
+
+    def test_resolve_request_model_mode_rejects_invalid(self):
+        with pytest.raises(ValueError, match="model_mode"):
+            _resolve_request_model_mode({"model_mode": "turbo"})
+
+    def test_supervisor_rejects_missing_topic(self):
+        with pytest.raises(ValueError, match="topic"):
+            supervisor_agent({})
+
+    def test_supervisor_rejects_empty_topic(self):
+        with pytest.raises(ValueError, match="topic"):
+            supervisor_agent({"topic": "   "})
+
+    def test_supervisor_rejects_invalid_model_mode(self):
+        with pytest.raises(ValueError, match="model_mode"):
+            supervisor_agent({"topic": "latest AI news", "model_mode": "invalid"})
 
 
 # ─── _parse_research_items tests ────────────────────────────────────────────

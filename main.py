@@ -1,12 +1,32 @@
 # main.py
+import argparse
+import time
 from colorama import init
 from src.graph import build_graph
-import time
 
 init(autoreset=True)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the local multi-agent assistant.",
+    )
+    parser.add_argument(
+        "query",
+        nargs="*",
+        help="Optional query text. If omitted, interactive prompt is used.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "fast", "accurate"],
+        default="auto",
+        help="Model selection mode for this request.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     print("Initializing Multi-Agent System with Smart Routing...")
     try:
         app = build_graph()
@@ -16,9 +36,8 @@ def main():
         return
 
     # Get user query
-    import sys
-    if len(sys.argv) > 1:
-        user_query = " ".join(sys.argv[1:])
+    if args.query:
+        user_query = " ".join(args.query)
     else:
         user_query = input("Enter your query: ").strip()
         if not user_query:
@@ -28,6 +47,7 @@ def main():
         "topic": user_query,
         "route": [],
         "query_type": "",
+        "model_mode": args.mode,
         "research_output": "",
         "analysis_output": "",
         "final_report": "",

@@ -3,7 +3,7 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 from colorama import Fore, Style
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from src.llm_engine import ModelSelector
@@ -148,6 +148,28 @@ EDITOR_PROMPTS = {
 }
 
 
+VALID_MODEL_MODES = {"auto", "fast", "accurate"}
+
+
+def _extract_topic(state: Dict[str, Any]) -> str:
+    topic = state.get("topic")
+    if not isinstance(topic, str) or not topic.strip():
+        raise ValueError("Invalid input: 'topic' must be a non-empty string.")
+    return topic.strip()
+
+
+def _resolve_request_model_mode(state: Dict[str, Any]) -> Optional[str]:
+    raw_mode = state.get("model_mode")
+    if raw_mode is None:
+        return None
+    if not isinstance(raw_mode, str):
+        raise ValueError("Invalid input: 'model_mode' must be one of auto, fast, accurate.")
+    normalized = raw_mode.strip().lower()
+    if normalized not in VALID_MODEL_MODES:
+        raise ValueError("Invalid input: 'model_mode' must be one of auto, fast, accurate.")
+    return normalized
+
+
 def _classify_query_heuristic(topic: str) -> tuple[List[str], str, str]:
     q = topic.lower()
     # Use word-boundary matching to avoid false positives from substrings
@@ -249,11 +271,13 @@ def _build_fallback_report(topic: str, query_type: str, research: str, analysis:
 
 def supervisor_agent(state: dict) -> dict:
     """Routes the query to the right agents based on query classification."""
-    topic = state["topic"]
+    topic = _extract_topic(state)
+    model_mode = _resolve_request_model_mode(state)
     model_name = ModelSelector.get_model_name(
         "supervisor",
         task_text=topic,
         query_type="routing",
+        mode=model_mode,
     )
 
     print(f"\n{Fore.MAGENTA}┌─ SUPERVISOR ({model_name}){Style.RESET_ALL}")
@@ -268,12 +292,16 @@ def supervisor_agent(state: dict) -> dict:
         print(f"{Fore.MAGENTA}└──────────────────────────────{Style.RESET_ALL}")
         log_event(_log, "supervisor_routed", topic=topic, route=agents,
                   query_type=query_type, reason=reason, model=model_name)
-        return {"route": agents, "query_type": query_type}
+        output = {"route": agents, "query_type": query_type}
+        if model_mode is not None:
+            output["model_mode"] = model_mode
+        return output
 
     llm = ModelSelector.get_model(
         "supervisor",
         task_text=topic,
         query_type="routing",
+        mode=model_mode,
     )
     messages = [
         SystemMessage(content=SUPERVISOR_PROMPT),
@@ -315,7 +343,10 @@ def supervisor_agent(state: dict) -> dict:
         agents = ["researcher", "editor"]
         query_type = "factual"
 
-    return {"route": agents, "query_type": query_type}
+    output = {"route": agents, "query_type": query_type}
+    if model_mode is not None:
+        output["model_mode"] = model_mode
+    return output
 
 
 # ─── Researcher 
@@ -324,12 +355,14 @@ def supervisor_agent(state: dict) -> dict:
 
 def research_agent(state: dict) -> dict:
     """Searches the web for information about the topic."""
-    topic = state["topic"]
+    topic = _extract_topic(state)
+    model_mode = _resolve_request_model_mode(state)
     query_type = state.get("query_type", "factual")
     model_name = ModelSelector.get_model_name(
         "researcher",
         task_text=topic,
         query_type=query_type,
+        mode=model_mode,
     )
 
     print(f"\n{Fore.YELLOW}┌─ RESEARCHER ({model_name}){Style.RESET_ALL}")
@@ -381,6 +414,7 @@ def research_agent(state: dict) -> dict:
         "researcher",
         task_text=topic,
         query_type=query_type,
+        mode=model_mode,
     ).bind_tools(
         [web_search, searxng_search, duckduckgo_search, news_search]
     )
@@ -431,12 +465,14 @@ def research_agent(state: dict) -> dict:
 
 def analyst_agent(state: dict) -> dict:
     """Analyzes data with Python code execution."""
-    topic = state["topic"]
+    topic = _extract_topic(state)
+    model_mode = _resolve_request_model_mode(state)
     research_data = state.get("research_output", "No data provided.")
     model_name = ModelSelector.get_model_name(
         "analyst",
         task_text=f"{topic}\n{research_data[:1500]}",
         query_type="data",
+        mode=model_mode,
     )
 
     print(f"\n{Fore.BLUE}┌─ ANALYST ({model_name}){Style.RESET_ALL}")
@@ -445,6 +481,7 @@ def analyst_agent(state: dict) -> dict:
         "analyst",
         task_text=f"{topic}\n{research_data[:1500]}",
         query_type="data",
+        mode=model_mode,
     ).bind_tools([python_repl])
     messages = [
         SystemMessage(content=ANALYST_PROMPT),
@@ -482,7 +519,8 @@ def analyst_agent(state: dict) -> dict:
 
 def editor_agent(state: dict) -> dict:
     """Synthesizes all gathered information into a professional report."""
-    topic = state["topic"]
+    topic = _extract_topic(state)
+    model_mode = _resolve_request_model_mode(state)
     query_type = state.get("query_type", "general")
     research = state.get("research_output", "")
     analysis = state.get("analysis_output", "")
@@ -490,6 +528,7 @@ def editor_agent(state: dict) -> dict:
         "editor",
         task_text=f"{topic}\n{research[:1500]}\n{analysis[:1500]}",
         query_type=query_type,
+        mode=model_mode,
     )
 
     print(f"\n{Fore.GREEN}┌─ EDITOR ({model_name}){Style.RESET_ALL}")
@@ -500,6 +539,7 @@ def editor_agent(state: dict) -> dict:
         "editor",
         task_text=f"{topic}\n{research[:1500]}\n{analysis[:1500]}",
         query_type=query_type,
+        mode=model_mode,
     )
 
     # Select the right prompt template based on query type

@@ -9,6 +9,7 @@ class AgentState(TypedDict):
     topic: str
     route: List[str]          # set by supervisor: e.g. ["researcher", "editor"]
     query_type: str            # set by supervisor: "news", "factual", "data", "general"
+    model_mode: NotRequired[str]  # optional: "auto" | "fast" | "accurate"
     research_output: str
     analysis_output: str
     final_report: str
