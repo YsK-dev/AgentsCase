@@ -83,7 +83,14 @@ class RoutedChatModel:
         return clone
 
     def _build_model(self, model_name: str):
-        llm = ChatOllama(model=model_name, temperature=self.temperature, **self.extra_kwargs)
+        timeout = self.extra_kwargs.pop("timeout", 120)
+        llm = ChatOllama(
+            model=model_name,
+            temperature=self.temperature,
+            timeout=timeout,
+            **self.extra_kwargs,
+        )
+        self.extra_kwargs["timeout"] = timeout  # restore for next call
         if self._tools is not None:
             llm = llm.bind_tools(self._tools)
         return llm
@@ -131,9 +138,9 @@ class ModelSelector:
     # role -> (temperature, kwargs)
     ROLE_CONFIG = {
         "supervisor": (0.0, {"num_predict": 256}),
-        "researcher": (0.3, {"num_predict": 512}),
-        "analyst": (0.3, {"num_predict": 512}),
-        "editor": (0.3, {"num_predict": 512}),
+        "researcher": (0.3, {"num_predict": 1024}),
+        "analyst": (0.3, {"num_predict": 1024}),
+        "editor": (0.3, {"num_predict": 2048}),
     }
 
     @staticmethod

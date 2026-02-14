@@ -1,9 +1,4 @@
 # tests/test_agents.py — Unit tests for agent logic (heuristic classifier & fallback report)
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
 from src.agents import _classify_query_heuristic, _build_fallback_report, _parse_research_items
 
 

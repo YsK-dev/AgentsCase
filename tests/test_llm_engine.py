@@ -1,9 +1,5 @@
 # tests/test_llm_engine.py — Unit tests for model selection & routing logic
-import os
-import sys
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.llm_engine import _complexity_score, _dedupe_keep_order, ModelSelector
 

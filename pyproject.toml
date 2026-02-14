@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "agents-case"
+version = "0.1.0"
+description = "Multi-agent system with smart routing using LangGraph and local LLMs"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain",
+    "langchain-ollama",
+    "langchain-community",
+    "langchain-core",
+    "langchain-text-splitters",
+    "langchain-experimental",
+    "langgraph",
+    "pypdf",
+    "python-dotenv",
+    "chromadb",
+    "pydantic",
+    "pydantic-core",
+    "pydantic-settings",
+    "yfinance",
+    "ddgs",
+    "matplotlib",
+    "colorama",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

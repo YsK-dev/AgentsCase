@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 
 from langchain_core.tools import tool
 
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://13.60.59.170/search")
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888/search")
 SEARXNG_TIMEOUT = float(os.getenv("SEARXNG_TIMEOUT", "5"))
 SEARCH_MAX_RESULTS = int(os.getenv("SEARCH_MAX_RESULTS", "10"))
 DUCKDUCKGO_HTML_URL = os.getenv("DUCKDUCKGO_HTML_URL", "https://html.duckduckgo.com/html/")
@@ -36,6 +36,32 @@ USER_AGENT = (
 )
 _DDG_LOCK = threading.Lock()
 _DDG_LAST_REQUEST_TS = 0.0
+
+# ─── Search Result Cache (TTL-based) ────────────────────────────────────────
+_SEARCH_CACHE: Dict[str, tuple] = {}  # key -> (timestamp, results)
+_SEARCH_CACHE_TTL = 300.0  # 5 minutes
+_SEARCH_CACHE_LOCK = threading.Lock()
+
+
+def _cache_get(key: str) -> Any:
+    """Return cached results if still valid, else None."""
+    with _SEARCH_CACHE_LOCK:
+        entry = _SEARCH_CACHE.get(key)
+        if entry is None:
+            return None
+        ts, results = entry
+        if (time.monotonic() - ts) > _SEARCH_CACHE_TTL:
+            del _SEARCH_CACHE[key]
+            return None
+        return results
+
+
+def _cache_set(key: str, results: Any) -> None:
+    """Store results in cache with current timestamp."""
+    with _SEARCH_CACHE_LOCK:
+        _SEARCH_CACHE[key] = (time.monotonic(), results)
+
+
 _RERANK_STOPWORDS = {
     "the", "and", "for", "with", "from", "that", "this", "what", "when", "where",
     "who", "how", "why", "are", "was", "were", "is", "in", "on", "to", "of", "a",
@@ -579,12 +605,22 @@ def _parse_jina_ddg_markdown(markdown: str, max_results: int) -> List[Dict[str, 
 
 
 def run_searxng_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
+    cache_key = f"searxng:{query}:{max_results}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     data = _fetch_json(SEARXNG_URL, {"q": query, "format": "json"})
     ranked = _rerank_by_query(query, _parse_searx_results(data, max_results * 2))
-    return ranked[:max_results]
+    results = ranked[:max_results]
+    _cache_set(cache_key, results)
+    return results
 
 
 def run_searxng_news_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
+    cache_key = f"searxng_news:{query}:{max_results}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     all_results = []
     query_variants = [query]
 
@@ -618,12 +654,20 @@ def run_searxng_news_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -
 
             all_results = _dedupe_results(all_results)
             if len(all_results) >= max_results:
-                return all_results[:max_results]
+                results = all_results[:max_results]
+                _cache_set(cache_key, results)
+                return results
 
-    return all_results[:max_results]
+    results = all_results[:max_results]
+    _cache_set(cache_key, results)
+    return results
 
 
 def run_duckduckgo_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> List[Dict[str, str]]:
+    cache_key = f"ddg:{query}:{max_results}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     endpoints = [
         f"{DUCKDUCKGO_HTML_URL}?{urllib.parse.urlencode({'q': query, 'kl': 'us-en'})}",
         f"{DUCKDUCKGO_LITE_URL}?{urllib.parse.urlencode({'q': query, 'kl': 'us-en'})}",
@@ -681,6 +725,7 @@ def run_duckduckgo_search(query: str, max_results: int = SEARCH_MAX_RESULTS) -> 
         last_error = exc
 
     if best_results:
+        _cache_set(cache_key, best_results)
         return best_results
     if last_error is not None:
         raise RuntimeError(f"DuckDuckGo search failed after retries and fallback: {last_error}")

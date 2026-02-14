@@ -288,7 +288,6 @@ def supervisor_agent(state: dict) -> dict:
         json_str = content
         # Remove <think>...</think> blocks if present
         if "<think>" in json_str:
-            import re
             json_str = re.sub(r"<think>.*?</think>", "", json_str, flags=re.DOTALL).strip()
         # Try to find JSON in the remaining text
         if "{" in json_str:
@@ -338,15 +337,23 @@ def research_agent(state: dict) -> dict:
     # For news queries, call news_search directly — don't rely on small LLMs
     if query_type == "news":
         print(f"{Fore.YELLOW}│  🔧 Tool: news_search (direct, query_type=news){Style.RESET_ALL}")
-        result = news_search.invoke({"query": topic})
+        try:
+            result = news_search.invoke({"query": topic})
+        except Exception as e:
+            _log.error("news_search failed: %s", e)
+            result = f"Search unavailable: {e}"
         log_event(_log, "researcher_tool_call", tool="news_search",
                   args={"query": topic}, result_len=len(str(result)), mode="direct")
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of news results{Style.RESET_ALL}")
 
         # If news_search returned nothing useful, fallback to web_search
-        if "No news results found" in str(result):
+        if "No news results found" in str(result) or "Search unavailable" in str(result):
             print(f"{Fore.YELLOW}│  ⚠️  No news found, falling back to web_search{Style.RESET_ALL}")
-            result = web_search.invoke({"query": f"{topic} latest news"})
+            try:
+                result = web_search.invoke({"query": f"{topic} latest news"})
+            except Exception as e:
+                _log.error("web_search fallback failed: %s", e)
+                result = f"All search engines unavailable. Could not retrieve results for: {topic}"
             log_event(_log, "researcher_tool_call", tool="web_search",
                       args={"query": f"{topic} latest news"}, result_len=len(str(result)),
                       mode="news_fallback")
@@ -358,7 +365,11 @@ def research_agent(state: dict) -> dict:
     # For factual queries, call web_search directly for speed
     if query_type == "factual":
         print(f"{Fore.YELLOW}│  🔧 Tool: web_search (direct, query_type=factual){Style.RESET_ALL}")
-        result = web_search.invoke({"query": topic})
+        try:
+            result = web_search.invoke({"query": topic})
+        except Exception as e:
+            _log.error("web_search failed: %s", e)
+            result = f"All search engines unavailable. Could not retrieve results for: {topic}"
         log_event(_log, "researcher_tool_call", tool="web_search",
                   args={"query": topic}, result_len=len(str(result)), mode="direct")
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of results{Style.RESET_ALL}")

@@ -1,9 +1,5 @@
 # tests/test_tools.py — Unit tests for code execution safety & tool helpers
 import pytest
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.tools import (
     _validate_python_code,
