@@ -8,7 +8,12 @@ init(autoreset=True)
 
 def main():
     print("Initializing Multi-Agent System with Smart Routing...")
-    app = build_graph()
+    try:
+        app = build_graph()
+    except Exception as e:
+        print(f"\n❌ Failed to build agent graph: {e}")
+        print("Make sure Ollama is running (`ollama serve`) and required models are pulled.")
+        return
 
     # Get user query
     import sys
@@ -31,9 +36,17 @@ def main():
 
     print(f"\nUser Query: {user_query}\n")
 
-    start = time.perf_counter()
-    result = app.invoke(initial_state)
-    total_ms = (time.perf_counter() - start) * 1000
+    try:
+        start = time.perf_counter()
+        result = app.invoke(initial_state)
+        total_ms = (time.perf_counter() - start) * 1000
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user.")
+        return
+    except Exception as e:
+        print(f"\n❌ Pipeline execution failed: {e}")
+        print("Check logs/agent_system.log for details.")
+        return
 
     print("\n" + "=" * 50)
     print("FINAL REPORT")
