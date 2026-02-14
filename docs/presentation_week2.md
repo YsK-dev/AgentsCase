@@ -94,3 +94,14 @@ Potential bonus next steps:
 - MCP integration for additional tools/context
 - LangFuse or similar tracing dashboard for latency/error metrics
 - richer benchmark set for model-tier calibration
+
+---
+
+# Slide 6 - References
+
+- LangGraph docs: https://docs.langchain.com/oss/python/langgraph/
+- Ollama docs: https://docs.ollama.com/
+- SearXNG docs/API: https://docs.searxng.org/
+- Python AST docs: https://docs.python.org/3/library/ast.html
+- FrugalGPT (LLM cascades): https://arxiv.org/abs/2305.05176
+- RouteLLM (LLM routing): https://arxiv.org/abs/2406.18665

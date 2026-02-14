@@ -82,3 +82,20 @@ pytest tests/ -v
 
 - SearXNG is used as the primary engine because it benchmarked better in this project environment.
 - DuckDuckGo remains enabled for fallback resilience.
+
+## References
+
+- LangGraph docs: https://docs.langchain.com/oss/python/langgraph/
+- LangGraph repository: https://github.com/langchain-ai/langgraph
+- Ollama docs: https://docs.ollama.com/
+- SearXNG docs: https://docs.searxng.org/
+- SearXNG Search API: https://docs.searxng.org/dev/search_api.html
+- SearXNG container installation: https://docs.searxng.org/admin/installation-docker
+- Python `ast` docs: https://docs.python.org/3/library/ast.html
+- Python `subprocess` docs: https://docs.python.org/3/library/subprocess.html
+- FrugalGPT paper (LLM cascades): https://arxiv.org/abs/2305.05176
+- RouteLLM paper (LLM routing): https://arxiv.org/abs/2406.18665
+
+https://gerred.github.io/building-an-agentic-system/core-architecture.html
+https://medium.com/@anil.goyal0057/building-a-powerful-ai-agent-using-langchain-mistral-faiss-and-web-search-c9953751a1b2
+https://medium.com/@elmo92/search-in-peace-with-searxng-an-alternative-search-engine-that-keeps-your-searches-private-accd8cddd6fc
