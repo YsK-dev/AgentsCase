@@ -379,8 +379,16 @@ def research_agent(state: dict) -> dict:
                   args={"query": topic}, result_len=len(str(result)), mode="direct")
         print(f"{Fore.YELLOW}│  📄 Got {len(str(result))} chars of news results{Style.RESET_ALL}")
 
-        # If news_search returned nothing useful, fallback to web_search
-        if "No news results found" in str(result) or "Search unavailable" in str(result):
+        # If news_search returned nothing useful, fallback to web_search.
+        result_text = str(result)
+        result_text_lower = result_text.lower()
+        needs_news_fallback = (
+            "no news results found" in result_text_lower
+            or "search unavailable" in result_text_lower
+            or "news search error" in result_text_lower
+        )
+
+        if needs_news_fallback:
             print(f"{Fore.YELLOW}│  ⚠️  No news found, falling back to web_search{Style.RESET_ALL}")
             try:
                 result = web_search.invoke({"query": f"{topic} latest news"})

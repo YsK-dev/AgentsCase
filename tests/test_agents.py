@@ -1,11 +1,13 @@
 # tests/test_agents.py — Unit tests for agent logic (heuristic classifier & fallback report)
 import pytest
+import src.agents as agents_module
 
 from src.agents import (
     _classify_query_heuristic,
     _build_fallback_report,
     _parse_research_items,
     _resolve_request_model_mode,
+    research_agent,
     supervisor_agent,
 )
 
@@ -156,3 +158,35 @@ class TestBuildFallbackReport:
         research = "[1] Title\n    URL: http://example.com/test\n    Snip.\n"
         report = _build_fallback_report("topic", "factual", research, "")
         assert "http://example.com/test" in report
+
+
+class TestResearchAgentFallback:
+    """Tests the direct news-query fallback logic in research_agent."""
+
+    def test_news_error_triggers_web_search_fallback(self, monkeypatch):
+        class _FakeTool:
+            def __init__(self, output: str):
+                self.output = output
+
+            def invoke(self, args):
+                return self.output
+
+        monkeypatch.setattr(
+            agents_module.ModelSelector,
+            "get_model_name",
+            staticmethod(lambda *args, **kwargs: "test-model"),
+        )
+        monkeypatch.setattr(
+            agents_module,
+            "news_search",
+            _FakeTool("News search error: [Errno 61] Connection refused"),
+        )
+        monkeypatch.setattr(
+            agents_module,
+            "web_search",
+            _FakeTool("[1] Istanbul latest headlines\n    URL: https://example.com"),
+        )
+
+        result = research_agent({"topic": "Istanbul news", "query_type": "news"})
+
+        assert "Istanbul latest headlines" in result["research_output"]

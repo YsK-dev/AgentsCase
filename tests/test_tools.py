@@ -1,5 +1,6 @@
 # tests/test_tools.py — Unit tests for code execution safety & tool helpers
 import pytest
+import src.tools as tools_module
 
 from src.tools import (
     _validate_python_code,
@@ -153,3 +154,29 @@ class TestSearchHelpers:
         assert "[1]" in result
         assert "Test" in result
         assert "http://t.com" in result
+
+
+class TestNewsSearchFallback:
+    """Tests fallback behavior for news search when SearXNG is unavailable."""
+
+    def test_news_search_falls_back_to_duckduckgo(self, monkeypatch):
+        def _searx_fail(*args, **kwargs):
+            raise RuntimeError("[Errno 61] Connection refused")
+
+        def _ddg_ok(*args, **kwargs):
+            return [
+                {
+                    "title": "Istanbul update",
+                    "url": "https://example.com/news/istanbul",
+                    "snippet": "Latest local developments.",
+                }
+            ]
+
+        monkeypatch.setattr(tools_module, "run_searxng_news_search", _searx_fail)
+        monkeypatch.setattr(tools_module, "run_duckduckgo_search", _ddg_ok)
+
+        result = tools_module.news_search.invoke({"query": "Istanbul news"})
+
+        assert "[1] Istanbul update" in result
+        assert "Source: example.com" in result
+        assert "URL: https://example.com/news/istanbul" in result

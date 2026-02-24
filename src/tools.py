@@ -248,6 +248,26 @@ def _format_search_results(results: List[Dict[str, str]]) -> str:
     return "\n\n".join(formatted)
 
 
+def _format_news_results(results: List[Dict[str, str]]) -> str:
+    if not results:
+        return "No news results found."
+
+    formatted = []
+    for i, item in enumerate(results, 1):
+        title = _clean_text(item.get("title")) or "No title"
+        date = _clean_text(item.get("date")) or "Unknown date"
+        source = _clean_text(item.get("source")) or "Unknown source"
+        url = _normalize_text(item.get("url")) or "N/A"
+        snippet = _clean_text(item.get("snippet")) or "No snippet"
+        formatted.append(
+            f"[{i}] {title}\n"
+            f"    Date: {date} | Source: {source}\n"
+            f"    URL: {url}\n"
+            f"    {snippet}"
+        )
+    return "\n\n".join(formatted)
+
+
 def _tokenize_for_rank(text: str) -> set:
     terms = set(re.findall(r"[a-z0-9]{3,}", text.lower()))
     return {term for term in terms if term not in _RERANK_STOPWORDS}
@@ -783,22 +803,41 @@ def web_search(query: str) -> str:
 @tool
 def news_search(query: str) -> str:
     """Search for recent news articles. Returns headlines with dates, sources, and summaries."""
+    errors = []
+
     try:
         results = run_searxng_news_search(query)
-        if not results:
-            return "No news results found."
-
-        formatted = []
-        for i, item in enumerate(results, 1):
-            formatted.append(
-                f"[{i}] {_clean_text(item.get('title')) or 'No title'}\n"
-                f"    Date: {_clean_text(item.get('date')) or 'Unknown date'} | Source: {_clean_text(item.get('source')) or 'Unknown source'}\n"
-                f"    URL: {_normalize_text(item.get('url')) or 'N/A'}\n"
-                f"    {_clean_text(item.get('snippet')) or 'No snippet'}"
-            )
-        return "\n\n".join(formatted)
+        if results:
+            return _format_news_results(results)
+        errors.append("SearXNG returned no news results.")
     except Exception as e:
-        return f"News search error: {e}"
+        errors.append(f"SearXNG error: {e}")
+
+    # Fallback: use DuckDuckGo and map into news-style fields.
+    try:
+        ddg_results = run_duckduckgo_search(f"{query} latest news")
+        if ddg_results:
+            news_like_results = []
+            for item in ddg_results:
+                url = _normalize_text(item.get("url"))
+                source = ""
+                if url:
+                    source = urllib.parse.urlparse(url).netloc
+                news_like_results.append(
+                    {
+                        "title": _clean_text(item.get("title")) or "No title",
+                        "url": url,
+                        "snippet": _clean_text(item.get("snippet")) or "No snippet",
+                        "date": "Unknown date",
+                        "source": source or "DuckDuckGo",
+                    }
+                )
+            return _format_news_results(news_like_results)
+        errors.append("DuckDuckGo returned no news results.")
+    except Exception as e:
+        errors.append(f"DuckDuckGo error: {e}")
+
+    return "News search error: " + " | ".join(errors)
 
 
 @tool
