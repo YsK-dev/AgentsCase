@@ -113,6 +113,16 @@ BLOCKED_PYTHON_ROOTS = {
     "sys",
     "threading",
 }
+# Attributes that reach running frames or code objects. With them, code can walk from a
+# generator back to the runner's frame and its real modules, without any underscore.
+BLOCKED_PYTHON_ATTRIBUTES = {
+    "ag_await", "ag_code", "ag_frame",
+    "co_code", "co_consts",
+    "cr_await", "cr_code", "cr_frame",
+    "f_back", "f_builtins", "f_code", "f_globals", "f_locals",
+    "gi_code", "gi_frame", "gi_yieldfrom",
+    "tb_frame", "tb_next",
+}
 SAFE_PYTHON_RUNNER = r"""
 import base64
 import contextlib
@@ -363,13 +373,17 @@ def _validate_python_code(code: str) -> None:
                 raise UnsafePythonCodeError(
                     f"Access to '{root}' is blocked."
                 )
+            # ().__class__.__base__.__subclasses__() and similar routes lead to os.system and open.
+            if node.attr.startswith("_"):
+                raise UnsafePythonCodeError(
+                    f"Attribute '{node.attr}' is blocked (names starting with '_')."
+                )
+            if node.attr in BLOCKED_PYTHON_ATTRIBUTES:
+                raise UnsafePythonCodeError(
+                    f"Attribute '{node.attr}' is blocked (frame and code access)."
+                )
 
-        if isinstance(node, ast.Name) and node.id in {
-            "__builtins__",
-            "__loader__",
-            "__spec__",
-            "__import__",
-        }:
+        if isinstance(node, ast.Name) and node.id.startswith("__"):
             raise UnsafePythonCodeError(
                 f"Name '{node.id}' is blocked."
             )

@@ -84,6 +84,37 @@ class TestValidatePythonCodeBlocked:
         with pytest.raises(UnsafePythonCodeError, match="blocked"):
             _validate_python_code("x = __import__('os')")
 
+    def test_subclass_walk_blocked(self):
+        # A known route from a plain tuple to os.system through object.__subclasses__().
+        code = "c = ().__class__.__base__.__subclasses__()"
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code(code)
+
+    def test_any_underscore_attribute_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code("x = (1).__doc__")
+
+    def test_dunder_name_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code("x = __name__")
+
+    def test_generator_frame_walk_blocked(self):
+        # Without underscores: generator -> frame -> caller frames -> the runner's real modules.
+        code = (
+            "box = []\n"
+            "def f(b=box):\n"
+            "    yield b[0].gi_frame.f_back\n"
+            "box.append(f())\n"
+            "for fr in box[0]:\n"
+            "    break\n"
+            "print(fr.f_back.f_globals)\n"
+        )
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code(code)
+
+    def test_single_underscore_variable_allowed(self):
+        _validate_python_code("_total = sum([1, 2, 3])\nprint(_total)")
+
     def test_syntax_error_rejected(self):
         with pytest.raises(UnsafePythonCodeError, match="Syntax error"):
             _validate_python_code("def foo(")
