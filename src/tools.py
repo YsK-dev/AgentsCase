@@ -74,6 +74,9 @@ _FOCUS_TERMS = {
 PYTHON_CODE_MAX_CHARS = int(os.getenv("PYTHON_CODE_MAX_CHARS", "4000"))
 PYTHON_EXEC_TIMEOUT = float(os.getenv("PYTHON_EXEC_TIMEOUT", "4.0"))
 PYTHON_OUTPUT_MAX_CHARS = int(os.getenv("PYTHON_OUTPUT_MAX_CHARS", "4000"))
+PYTHON_MEMORY_LIMIT_MB = int(os.getenv("PYTHON_MEMORY_LIMIT_MB", "512"))
+# The checks below can be bypassed (see README). Set PYTHON_TOOL=off to turn the tool off.
+PYTHON_TOOL_ENABLED = os.getenv("PYTHON_TOOL", "on").lower() != "off"
 SAFE_PYTHON_MODULES = {
     "collections",
     "datetime",
@@ -122,6 +125,8 @@ BLOCKED_PYTHON_ATTRIBUTES = {
     "f_back", "f_builtins", "f_code", "f_globals", "f_locals",
     "gi_code", "gi_frame", "gi_yieldfrom",
     "tb_frame", "tb_next",
+    # "{0.__self__.open}".format(print) reads any attribute from inside a string.
+    "format", "format_map",
 }
 SAFE_PYTHON_RUNNER = r"""
 import base64
@@ -129,6 +134,7 @@ import contextlib
 import io
 import json
 import sys
+import types
 
 SAFE_MODULES = {
     "collections",
@@ -144,11 +150,22 @@ SAFE_MODULES = {
     "statistics",
 }
 
+def public_view(module):
+    # Only public names that are not modules: fractions.sys, re.enum and json.codecs stay out.
+    view = types.SimpleNamespace()
+    for key in dir(module):
+        if key.startswith("_"):
+            continue
+        value = getattr(module, key)
+        if isinstance(value, types.ModuleType):
+            continue
+        setattr(view, key, value)
+    return view
+
 def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-    top_level = name.split(".")[0]
-    if top_level not in SAFE_MODULES:
+    if level != 0 or name not in SAFE_MODULES:
         raise ImportError(f"Import '{name}' is not allowed")
-    return __import__(name, globals, locals, fromlist, level)
+    return public_view(__import__(name))
 
 SAFE_BUILTINS = {
     "abs": abs,
@@ -185,7 +202,8 @@ stderr_buffer = io.StringIO()
 
 try:
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-        exec(compile(code, "<user_code>", "exec"), {"__builtins__": SAFE_BUILTINS}, {})
+        # One namespace, so functions can use names defined at the top level.
+        exec(compile(code, "<user_code>", "exec"), {"__builtins__": SAFE_BUILTINS})
 except Exception as exc:
     payload["error"] = str(exc)
 
@@ -341,20 +359,28 @@ def _validate_python_code(code: str) -> None:
         raise UnsafePythonCodeError(f"Syntax error: {exc}") from exc
 
     for node in ast.walk(tree):
+        if isinstance(node, ast.Match):
+            # Class patterns such as case o(__self__=m) read attributes without an ast.Attribute.
+            raise UnsafePythonCodeError("'match' statements are blocked.")
         if isinstance(node, ast.Import):
             for alias in node.names:
-                module = alias.name.split(".")[0]
+                module = alias.name
                 if module not in SAFE_PYTHON_MODULES:
                     raise UnsafePythonCodeError(
                         f"Import '{module}' is not allowed."
                     )
 
         if isinstance(node, ast.ImportFrom):
-            module = (node.module or "").split(".")[0]
-            if module not in SAFE_PYTHON_MODULES:
+            module = node.module or ""
+            if node.level != 0 or module not in SAFE_PYTHON_MODULES:
                 raise UnsafePythonCodeError(
                     f"Import from '{module or '[relative]'}' is not allowed."
                 )
+            for alias in node.names:
+                if alias.name == "*" or alias.name.startswith("_"):
+                    raise UnsafePythonCodeError(
+                        f"Import of '{alias.name}' from '{module}' is blocked."
+                    )
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in BLOCKED_PYTHON_CALLS:
@@ -380,13 +406,23 @@ def _validate_python_code(code: str) -> None:
                 )
             if node.attr in BLOCKED_PYTHON_ATTRIBUTES:
                 raise UnsafePythonCodeError(
-                    f"Attribute '{node.attr}' is blocked (frame and code access)."
+                    f"Attribute '{node.attr}' is blocked."
                 )
 
         if isinstance(node, ast.Name) and node.id.startswith("__"):
             raise UnsafePythonCodeError(
                 f"Name '{node.id}' is blocked."
             )
+
+
+def _limit_child_memory() -> None:
+    """Cap the child's address space. Linux enforces it; macOS may not, so use a container there."""
+    try:
+        import resource
+        limit = PYTHON_MEMORY_LIMIT_MB * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    except Exception:
+        pass
 
 
 def _run_safe_python_code(code: str) -> str:
@@ -398,6 +434,7 @@ def _run_safe_python_code(code: str) -> str:
             text=True,
             timeout=PYTHON_EXEC_TIMEOUT,
             env={},
+            preexec_fn=_limit_child_memory if os.name == "posix" else None,
         )
     except subprocess.TimeoutExpired:
         return f"Error: Code execution timed out after {PYTHON_EXEC_TIMEOUT:.1f}s."
@@ -856,7 +893,9 @@ def news_search(query: str) -> str:
 
 @tool
 def python_repl(code: str) -> str:
-    """Safely execute restricted Python code for calculations and small data checks."""
+    """Execute restricted Python code for calculations and small data checks."""
+    if not PYTHON_TOOL_ENABLED:
+        return "Error: the Python tool is turned off (PYTHON_TOOL=off)."
     try:
         _validate_python_code(code)
     except UnsafePythonCodeError as e:

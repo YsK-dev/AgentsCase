@@ -13,6 +13,28 @@ from src.tools import (
 )
 
 
+# ─── The runner: what imported modules expose ──────────────────────────────
+
+class TestRunnerImports:
+    """Imports give only public, non-module names; normal code still works."""
+
+    def test_module_inside_allowed_module_is_hidden(self):
+        out = _run_safe_python_code("import fractions\nprint(fractions.sys)")
+        assert out.startswith("Error") and "sys" in out
+
+    def test_public_names_still_work(self):
+        out = _run_safe_python_code("import fractions\nprint(fractions.Fraction(1, 3) + fractions.Fraction(1, 6))")
+        assert out.strip() == "1/2"
+
+    def test_function_sees_top_level_names(self):
+        code = "import math\nR = 2\ndef area(r):\n    return round(math.pi * r * r, 3)\nprint(area(R))"
+        assert _run_safe_python_code(code).strip() == "12.566"
+
+    def test_tool_can_be_turned_off(self, monkeypatch):
+        monkeypatch.setattr(tools_module, "PYTHON_TOOL_ENABLED", False)
+        assert "turned off" in tools_module.python_repl.invoke({"code": "print(1)"})
+
+
 # ─── _validate_python_code: normal cases ────────────────────────────────────
 
 class TestValidatePythonCodeNormal:
@@ -111,6 +133,31 @@ class TestValidatePythonCodeBlocked:
         )
         with pytest.raises(UnsafePythonCodeError, match="blocked"):
             _validate_python_code(code)
+
+    def test_private_name_from_import_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code("from random import _os")
+
+    def test_builtins_from_import_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code("from json import __builtins__ as b")
+
+    def test_star_import_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code("from math import *")
+
+    def test_submodule_import_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="not allowed"):
+            _validate_python_code("import json.tool as t")
+
+    def test_match_statement_blocked(self):
+        code = "match print:\n    case int(real=r):\n        pass\n"
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code(code)
+
+    def test_str_format_blocked(self):
+        with pytest.raises(UnsafePythonCodeError, match="blocked"):
+            _validate_python_code("print('{0}'.format(1))")
 
     def test_single_underscore_variable_allowed(self):
         _validate_python_code("_total = sum([1, 2, 3])\nprint(_total)")
