@@ -1,16 +1,20 @@
 # Multi-Agent Local LLM Assistant
 
 A local multi-agent assistant built with LangGraph and Ollama.
-It routes user queries across specialized agents, uses web search for fresh context, and runs safe Python code for verification.
+It routes user queries across specialized agents, uses web search for fresh context, and runs short Python calculations in a restricted process to check numbers.
 
 ## Features
 
 - 4-agent workflow: `supervisor`, `researcher`, `analyst`, `editor`
 - Multi-model routing: `fast`, `accurate`, `auto`
 - Web search tools: SearXNG (primary) + DuckDuckGo (fallback)
-- Safe Python execution tool for calculations
-- Structured JSON logging
-- Unit tests for routing, tools, and error scenarios
+- Python tool for calculations: the code is checked before it runs (only a short list of modules
+  such as `math` and `statistics`; no `open`, `eval`, `exec` or system modules; no attributes that
+  start with `_`) and runs in a separate Python process with an empty environment, a 4-second time
+  limit and capped output. **These checks are known to be bypassable.** The code is written by a
+  model that reads web pages, so treat it as untrusted: run this tool only inside a container or
+  virtual machine with no network and with memory limits, or turn it off with `PYTHON_TOOL=off`
+- 93 unit tests for routing, tools and error cases; they run without Ollama or the internet
 
 ## Architecture
 
@@ -39,7 +43,6 @@ flowchart LR
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
 Pull local models (example):
@@ -51,12 +54,23 @@ ollama pull qwen3:1.7b
 
 ## Configuration
 
-Important `.env` values:
+Settings are read from environment variables (for example `export MODEL_MODE=fast`).
+The main ones, with their defaults:
 
-- `MODEL_FAST`
-- `MODEL_ACCURATE`
-- `MODEL_MODE` (`auto`, `fast`, `accurate`)
-- `SEARXNG_URL` (AWS-hosted endpoint supported, e.g. `http://<host>/search`)
+| Variable | Default | Meaning |
+|---|---|---|
+| `MODEL_FAST` | `deepseek-coder:1.3b` | Small, fast Ollama model |
+| `MODEL_ACCURATE` | `qwen3:1.7b` | Larger Ollama model |
+| `MODEL_MODE` | `auto` | `auto`, `fast` or `accurate` |
+| `SEARXNG_URL` | `http://localhost:8888/search` | Your SearXNG search endpoint |
+| `SUPERVISOR_MODE` | `heuristic` | `heuristic`: route questions with keyword rules; anything else: ask the model |
+| `EDITOR_MODE` | `llm` | `deterministic`: build news, fact and data reports without the model |
+| `PYTHON_TOOL` | `on` | `off` turns the Python tool off |
+| `PYTHON_MEMORY_LIMIT_MB` | `512` | Memory cap for the Python process (enforced on Linux) |
+
+Web search tries SearXNG first. DuckDuckGo is the fallback: first directly, then through SearXNG,
+and last through the `r.jina.ai` text mirror, a third-party service (set
+`DUCKDUCKGO_PROXY_PREFIX` to change it).
 
 ## Run
 
