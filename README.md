@@ -1,18 +1,21 @@
 # Multi-Agent Local LLM Assistant
 
 A local multi-agent assistant built with LangGraph and Ollama.
-It routes user queries across specialized agents, uses web search for fresh context, and runs safe Python code for verification.
+It routes user queries across specialized agents, uses web search for fresh context, and runs short Python calculations in a restricted process to check numbers.
 
 ## Features
 
 - 4-agent workflow: `supervisor`, `researcher`, `analyst`, `editor`
 - Multi-model routing: `fast`, `accurate`, `auto`
 - Web search tools: SearXNG (primary) + DuckDuckGo (fallback)
-- Python tool for calculations: the code is checked before it runs (only a short list of
-  modules such as `math` and `statistics`; no files, network or system calls) and runs in a
-  separate Python process with an empty environment, a 4-second time limit and capped output
+- Python tool for calculations: the code is checked before it runs. Only a short list of
+  modules (such as `math` and `statistics`) can be imported; `open`, `eval`, `exec`, system
+  modules, attributes that start with `_` and access to running frames are blocked. The code
+  then runs in a separate Python process with an empty environment, a 4-second time limit and
+  capped output. This guards against mistakes, not against a determined attacker: Python cannot
+  be fully locked down from inside, so use a container if the input is untrusted
 - Structured JSON logging
-- 78 unit tests for routing, tools and error cases; they run without Ollama or the internet
+- 83 unit tests for routing, tools and error cases; they run without Ollama or the internet
 
 ## Architecture
 
