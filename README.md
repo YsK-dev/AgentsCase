@@ -8,14 +8,13 @@ It routes user queries across specialized agents, uses web search for fresh cont
 - 4-agent workflow: `supervisor`, `researcher`, `analyst`, `editor`
 - Multi-model routing: `fast`, `accurate`, `auto`
 - Web search tools: SearXNG (primary) + DuckDuckGo (fallback)
-- Python tool for calculations: the code is checked before it runs. Only a short list of
-  modules (such as `math` and `statistics`) can be imported; `open`, `eval`, `exec`, system
-  modules, attributes that start with `_` and access to running frames are blocked. The code
-  then runs in a separate Python process with an empty environment, a 4-second time limit and
-  capped output. This guards against mistakes, not against a determined attacker: Python cannot
-  be fully locked down from inside, so use a container if the input is untrusted
-- Structured JSON logging
-- 83 unit tests for routing, tools and error cases; they run without Ollama or the internet
+- Python tool for calculations: the code is checked before it runs (only a short list of modules
+  such as `math` and `statistics`; no `open`, `eval`, `exec` or system modules; no attributes that
+  start with `_`) and runs in a separate Python process with an empty environment, a 4-second time
+  limit and capped output. **These checks are known to be bypassable.** The code is written by a
+  model that reads web pages, so treat it as untrusted: run this tool only inside a container or
+  virtual machine with no network and with memory limits, or turn it off with `PYTHON_TOOL=off`
+- 93 unit tests for routing, tools and error cases; they run without Ollama or the internet
 
 ## Architecture
 
@@ -66,6 +65,8 @@ The main ones, with their defaults:
 | `SEARXNG_URL` | `http://localhost:8888/search` | Your SearXNG search endpoint |
 | `SUPERVISOR_MODE` | `heuristic` | `heuristic`: route questions with keyword rules; anything else: ask the model |
 | `EDITOR_MODE` | `llm` | `deterministic`: build news, fact and data reports without the model |
+| `PYTHON_TOOL` | `on` | `off` turns the Python tool off |
+| `PYTHON_MEMORY_LIMIT_MB` | `512` | Memory cap for the Python process (enforced on Linux) |
 
 Web search tries SearXNG first. DuckDuckGo is the fallback: first directly, then through SearXNG,
 and last through the `r.jina.ai` text mirror, a third-party service (set
